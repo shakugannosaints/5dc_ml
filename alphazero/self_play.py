@@ -314,7 +314,7 @@ class SelfPlayWorker:
         except Exception:
             pass
         try:
-            record.pgn = env.game.show_pgn()
+            record.pgn = env.game.show_pgn(engine.SHOW_CAPTURE | engine.SHOW_PROMOTION)
         except Exception:
             record.pgn = ""
 
@@ -487,14 +487,6 @@ class CppOnnxSelfPlayWorker:
             cuda_device_id=cuda_device_id,
         )
         log_task_stats = bool(getattr(self.sp_cfg, "log_worker_task_stats", True))
-
-        if provider == "cuda" and workers > 1:
-            logger.warning(
-                "cpp_onnx CUDA self-play currently runs through a single non-persistent worker for stability; "
-                "requested sp-workers=%s has been reduced to 1.",
-                workers,
-            )
-            workers = 1
 
         tasks: list[tuple[int, int]] = []
         base_seed = random.randint(0, 2**31 - 1)
@@ -922,28 +914,33 @@ class CppOnnxSelfPlayWorker:
         return env
 
     def _prepare_runtime_binaries(self, exe_path: Path) -> None:
-        provider = str(getattr(self.sp_cfg, "cpp_onnx_provider", "cpu")).lower()
-        if provider != "cuda":
-            return
-
         try:
             import onnxruntime
         except Exception as exc:
-            raise RuntimeError("CUDA self-play requires onnxruntime-gpu to be importable.") from exc
+            provider = str(getattr(self.sp_cfg, "cpp_onnx_provider", "cpu")).lower()
+            if provider == "cuda":
+                raise RuntimeError("CUDA self-play requires onnxruntime-gpu to be importable.") from exc
+            return
 
         ort_capi_dir = Path(onnxruntime.__file__).resolve().parent / "capi"
+        provider = str(getattr(self.sp_cfg, "cpp_onnx_provider", "cpu")).lower()
         required = [
             "onnxruntime.dll",
             "onnxruntime_providers_shared.dll",
-            "onnxruntime_providers_cuda.dll",
         ]
+        if provider == "cuda":
+            required.append("onnxruntime_providers_cuda.dll")
         for name in required:
             src = ort_capi_dir / name
             if not src.exists():
-                raise FileNotFoundError(f"Required CUDA provider DLL not found: {src}")
+                raise FileNotFoundError(f"Required ONNX Runtime DLL not found: {src}")
             dst = exe_path.parent / name
-            if not dst.exists() or src.stat().st_mtime > dst.stat().st_mtime:
-                shutil.copy2(src, dst)
+            if dst.exists():
+                src_stat = src.stat()
+                dst_stat = dst.stat()
+                if src_stat.st_size == dst_stat.st_size and int(src_stat.st_mtime) == int(dst_stat.st_mtime):
+                    continue
+            shutil.copy2(src, dst)
 
     def _load_games_from_binary(self, path: Path) -> list[GameRecord]:
         games: list[GameRecord] = []

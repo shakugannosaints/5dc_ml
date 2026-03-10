@@ -32,6 +32,24 @@
 
 namespace {
 
+bool diag_enabled() {
+    static const bool enabled = []() {
+        const char* value = std::getenv("AZ_ONNX_DIAG");
+        if (value == nullptr) {
+            return false;
+        }
+        return std::string(value) != "0";
+    }();
+    return enabled;
+}
+
+void diag_log(const std::string& message) {
+    if (!diag_enabled()) {
+        return;
+    }
+    std::cerr << "[az_selfplay_onnx] " << message << "\n" << std::flush;
+}
+
 constexpr int kDefaultPieceChannels = 14;
 constexpr int kDefaultLineShift = 5;
 constexpr const char* kDefaultVariantPgn = "[Board \"Very Small - Open\"]\n[Mode \"5D\"]\n";
@@ -640,8 +658,8 @@ public:
         return state_ref().pretty_move<state::SHOW_CAPTURE | state::SHOW_PROMOTION>(full_move(sm.from, sm.to));
     }
 
-    [[nodiscard]] std::string show_pgn() {
-        return game_.show_pgn();
+    [[nodiscard]] std::string show_pgn(uint16_t show_flags = state::SHOW_CAPTURE | state::SHOW_PROMOTION) {
+        return game_.show_pgn(show_flags);
     }
 
 private:
@@ -761,13 +779,15 @@ public:
         int board_squares
     )
         : env_(ORT_LOGGING_LEVEL_ERROR, "az_selfplay_onnx"),
-          memory_info_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)),
+          memory_info_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeCPUInput)),
           provider_(provider),
           piece_channels_(piece_channels),
           board_squares_(board_squares) {
+        diag_log("OnnxPolicyValue ctor begin provider=" + provider_ + " model=" + model_path.string());
         session_options_.SetIntraOpNumThreads(intra_threads);
         session_options_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
         if (provider_ == "cuda") {
+            diag_log("Appending CUDA execution provider");
             OrtCUDAProviderOptions cuda_options{};
             cuda_options.device_id = cuda_device_id;
             cuda_options.do_copy_in_default_stream = 1;
@@ -775,7 +795,9 @@ public:
         } else if (provider_ != "cpu") {
             throw std::runtime_error("Unsupported ONNX execution provider: " + provider_);
         }
+        diag_log("Creating ORT session");
         session_ = std::make_unique<Ort::Session>(env_, model_path.c_str(), session_options_);
+        diag_log("ORT session created");
     }
 
     [[nodiscard]] std::pair<float, std::vector<float>> predict_actions(
@@ -786,6 +808,11 @@ public:
         if (actions.empty()) {
             return {0.0f, {}};
         }
+        diag_log(
+            "predict_actions begin boards=" + std::to_string(encoded.num_boards) +
+            " actions=" + std::to_string(actions.size()) +
+            " provider=" + provider_
+        );
 
         const std::array<int64_t, 3> board_planes_shape = {
             static_cast<int64_t>(encoded.num_boards), static_cast<int64_t>(piece_channels_), static_cast<int64_t>(board_squares_)
@@ -837,6 +864,7 @@ public:
             Ort::Value::CreateTensor<int64_t>(memory_info_, action_is_submit.data(), action_is_submit.size(), action_dim.data(), action_dim.size()),
         };
 
+        diag_log("session.Run begin");
         auto outputs = session_->Run(
             Ort::RunOptions{nullptr},
             input_names_.data(),
@@ -845,8 +873,10 @@ public:
             output_names_.data(),
             output_names_.size()
         );
+        diag_log("session.Run end");
 
         float value = outputs[0].GetTensorMutableData<float>()[0];
+        diag_log("read value output");
         auto type_info = outputs[1].GetTensorTypeAndShapeInfo();
         std::vector<int64_t> output_shape = type_info.GetShape();
         size_t output_len = 1;
@@ -855,6 +885,7 @@ public:
         }
         const float* logits_ptr = outputs[1].GetTensorData<float>();
         std::vector<float> logits(logits_ptr, logits_ptr + output_len);
+        diag_log("predict_actions end logits=" + std::to_string(logits.size()));
         return {value, logits};
     }
 
@@ -1314,7 +1345,7 @@ private:
             result.terminal_reason = "capture_king_or_material";
         }
         result.total_semimoves = env.total_semimoves();
-        result.pgn = env.show_pgn();
+        result.pgn = env.show_pgn(state::SHOW_CAPTURE | state::SHOW_PROMOTION);
         for (auto& sample : result.samples) {
             sample.value_target = sample.player == 0 ? result.outcome : -result.outcome;
         }
