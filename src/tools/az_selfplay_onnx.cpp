@@ -529,8 +529,11 @@ public:
         process_lines(mandatory);
         process_lines(optional_lines);
 
-        semimoves = apply_lexicographic_filter(semimoves);
-        return {semimoves, mandatory.empty()};
+        std::vector<Semimove> filtered_semimoves = apply_lexicographic_filter(semimoves);
+        if (filtered_semimoves.empty() && !semimoves.empty() && !mandatory.empty()) {
+            filtered_semimoves = semimoves;
+        }
+        return {filtered_semimoves, mandatory.empty()};
     }
 
     [[nodiscard]] bool apply_semimove(const Semimove& sm, bool validate = true) {

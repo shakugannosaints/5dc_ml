@@ -317,10 +317,16 @@ class SemimoveEnv:
                 seen_keys.add(sm_key)
                 semimoves.append(sm)
 
-        semimoves = self._apply_lexicographic_filter(semimoves)
-        self._frontier_semimoves = semimoves
-        self._frontier_keys = {self._semimove_key(sm) for sm in semimoves}
+        filtered_semimoves = self._apply_lexicographic_filter(semimoves)
         mandatory, _, _ = self.state.get_timeline_status()
+        # Lexicographic pruning is only a duplicate-reduction heuristic in
+        # capture-king mode. If it removes every frontier move while the turn is
+        # still incomplete, fall back to the raw pseudolegal frontier instead of
+        # spuriously reporting "no legal action".
+        if not filtered_semimoves and semimoves and len(mandatory) != 0:
+            filtered_semimoves = semimoves
+        self._frontier_semimoves = filtered_semimoves
+        self._frontier_keys = {self._semimove_key(sm) for sm in filtered_semimoves}
         self._frontier_can_submit = len(mandatory) == 0
         self._frontier_cache_version = self._state_version
         return self._frontier_semimoves, self._frontier_can_submit
