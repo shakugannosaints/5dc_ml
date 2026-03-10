@@ -647,6 +647,13 @@ std::vector<vec4> state::gen_movable_pieces() const
     return get_movable_pieces(lines);
 }
 
+std::vector<vec4> state::gen_movable_pieces_unsafe() const
+{
+    auto [mandatory_timelines, optional_timelines, unplayable_timelines] = get_timeline_status(present, player);
+    auto lines = concat_vectors(mandatory_timelines, optional_timelines);
+    return get_movable_pieces_unsafe(lines);
+}
+
 std::vector<vec4> state::get_movable_pieces(std::vector<int> lines) const
 {
     if (player == 0)
@@ -657,6 +664,28 @@ std::vector<vec4> state::get_movable_pieces(std::vector<int> lines) const
     {
         return gen_movable_pieces_impl<true>(lines);
     }
+}
+
+std::vector<vec4> state::get_movable_pieces_unsafe(std::vector<int> lines) const
+{
+    std::vector<vec4> result;
+    for (int l : lines)
+    {
+        auto [t, c] = get_timeline_end(l);
+        const vec4 p0 = vec4(0,0,t,l);
+        std::shared_ptr<board> b_ptr = m->get_board(l, t, player);
+        bitboard_t b_pieces = player ? (b_ptr->black() & ~b_ptr->white()) : (b_ptr->white() & ~b_ptr->black());
+        for (int src_pos : marked_pos(b_pieces))
+        {
+            vec4 p = vec4(src_pos, p0);
+            auto moves = player ? m->gen_moves_unsafe<true>(p) : m->gen_moves_unsafe<false>(p);
+            if (moves.first())
+            {
+                result.push_back(p);
+            }
+        }
+    }
+    return result;
 }
 
 template <bool C>
@@ -826,6 +855,16 @@ generator<vec4> state::gen_piece_move(vec4 p) const
 generator<vec4> state::gen_piece_move(vec4 p, bool c) const
 {
     return m->gen_piece_move(p, c);
+}
+
+generator<vec4> state::gen_piece_move_unsafe(vec4 p) const
+{
+    return m->gen_piece_move_unsafe(p, player);
+}
+
+generator<vec4> state::gen_piece_move_unsafe(vec4 p, bool c) const
+{
+    return m->gen_piece_move_unsafe(p, c);
 }
 
 std::string state::to_string() const

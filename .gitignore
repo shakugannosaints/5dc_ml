@@ -3,6 +3,43 @@
 build/
 build*/
 
+### Virtual environments
+ml_venv/
+*_venv/
+venv/
+
+### Checkpoints & model artifacts
+checkpoints/
+*/checkpoints/
+*/*/checkpoints/
+*.pt
+*.onnx
+*.onnx.data
+*.onnx.json
+*.pyd
+*.exp
+*.ilk
+*.pdb
+
+### Logs (training/benchmark)
+logs/
+*/logs/
+ml/logs/
+alphazero/logs/
+*.jsonl
+
+### External binaries (keep submodules only)
+extern/onnxruntime*/
+extern/*.zip
+
+### AlphaZero training data
+alphazero/4x4/
+alphazero/__pycache__/
+
+### Temp files
+tmp_*.onnx*
+.0A_traincommand.txt
+.pytest_cache/
 
 ### eslint
 

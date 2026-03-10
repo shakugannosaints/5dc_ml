@@ -294,6 +294,20 @@ bool game::apply_move(ext_move m)
     return false;
 }
 
+bool game::apply_move_unsafe(ext_move m)
+{
+    state new_state = now->first;
+    bool flag = new_state.apply_move<true>(m.fm, m.promote_to);
+    if(flag)
+    {
+        cached.erase(now + 1, cached.end());
+        cached.push_back(std::make_pair(std::move(new_state), std::make_optional(m)));
+        now = cached.end() - 1;
+        return true;
+    }
+    return false;
+}
+
 bool game::submit()
 {
     std::optional<state> ans = now->first.can_submit();
@@ -311,6 +325,25 @@ bool game::submit()
         return true;
     }
     return false;
+}
+
+bool game::submit_unsafe()
+{
+    state new_state = now->first;
+    if(!new_state.submit<true>())
+    {
+        return false;
+    }
+    std::vector<ext_move> mvs;
+    for(const auto &[s,m] : cached)
+    {
+        if(m)
+        {
+            mvs.push_back(*m);
+        }
+    }
+    visit_child(action::from_vector(mvs, cached.begin()->first), {}, std::move(new_state));
+    return true;
 }
 
 bool game::currently_check() const

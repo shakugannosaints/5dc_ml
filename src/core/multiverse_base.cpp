@@ -280,7 +280,7 @@ bitboard_t multiverse::gen_physical_moves(vec4 p) const
     {
 #define GENERATE_MOVES_CASE(PIECE) \
         case PIECE: \
-            return gen_physical_moves_impl<PIECE, C>(p);
+            return gen_physical_moves_impl<PIECE, C, false>(p);
 
         GENERATE_MOVES_CASE(KING_W)
         GENERATE_MOVES_CASE(KING_B)
@@ -296,6 +296,8 @@ bitboard_t multiverse::gen_physical_moves(vec4 p) const
         GENERATE_MOVES_CASE(BISHOP_B)
         GENERATE_MOVES_CASE(QUEEN_W)
         GENERATE_MOVES_CASE(QUEEN_B)
+        GENERATE_MOVES_CASE(ROYAL_QUEEN_W)
+        GENERATE_MOVES_CASE(ROYAL_QUEEN_B)
         GENERATE_MOVES_CASE(PRINCESS_W)
         GENERATE_MOVES_CASE(PRINCESS_B)
         GENERATE_MOVES_CASE(PAWN_W)
@@ -331,7 +333,7 @@ movegen_t multiverse::gen_superphysical_moves(vec4 p) const
     {
 #define GENERATE_MOVES_CASE(PIECE) \
         case PIECE: \
-            return gen_moves_impl<PIECE, C, true>(p);
+            return gen_moves_impl<PIECE, C, true, false>(p);
 
         GENERATE_MOVES_CASE(KING_W)
         GENERATE_MOVES_CASE(KING_B)
@@ -384,7 +386,7 @@ movegen_t multiverse::gen_moves(vec4 p) const
     {
 #define GENERATE_MOVES_CASE(PIECE) \
         case PIECE: \
-            return gen_moves_impl<PIECE, C, false>(p);
+            return gen_moves_impl<PIECE, C, false, false>(p);
 
         GENERATE_MOVES_CASE(KING_W)
         GENERATE_MOVES_CASE(KING_B)
@@ -428,6 +430,117 @@ movegen_t multiverse::gen_moves(vec4 p) const
     }
 }
 
+template<bool C>
+movegen_t multiverse::gen_moves_unsafe(vec4 p) const
+{
+    std::shared_ptr<board> b_ptr = get_board(p.l(), p.t(), C);
+    piece_t p_piece = b_ptr->get_piece(p.xy());
+    if (b_ptr->umove() & pmask(p.xy()))
+    {
+        p_piece = static_cast<piece_t>(p_piece | 0x80);
+    }
+    switch (p_piece)
+    {
+#define GENERATE_MOVES_CASE(PIECE) \
+        case PIECE: \
+            return gen_moves_impl<PIECE, C, false, true>(p);
+
+        GENERATE_MOVES_CASE(KING_W)
+        GENERATE_MOVES_CASE(KING_B)
+        GENERATE_MOVES_CASE(KING_UW)
+        GENERATE_MOVES_CASE(KING_UB)
+        GENERATE_MOVES_CASE(COMMON_KING_W)
+        GENERATE_MOVES_CASE(COMMON_KING_B)
+        GENERATE_MOVES_CASE(ROOK_W)
+        GENERATE_MOVES_CASE(ROOK_B)
+        GENERATE_MOVES_CASE(ROOK_UW)
+        GENERATE_MOVES_CASE(ROOK_UB)
+        GENERATE_MOVES_CASE(BISHOP_W)
+        GENERATE_MOVES_CASE(BISHOP_B)
+        GENERATE_MOVES_CASE(QUEEN_W)
+        GENERATE_MOVES_CASE(QUEEN_B)
+        GENERATE_MOVES_CASE(ROYAL_QUEEN_W)
+        GENERATE_MOVES_CASE(ROYAL_QUEEN_B)
+        GENERATE_MOVES_CASE(PRINCESS_W)
+        GENERATE_MOVES_CASE(PRINCESS_B)
+        GENERATE_MOVES_CASE(PAWN_W)
+        GENERATE_MOVES_CASE(BRAWN_W)
+        GENERATE_MOVES_CASE(PAWN_B)
+        GENERATE_MOVES_CASE(BRAWN_B)
+        GENERATE_MOVES_CASE(PAWN_UW)
+        GENERATE_MOVES_CASE(BRAWN_UW)
+        GENERATE_MOVES_CASE(PAWN_UB)
+        GENERATE_MOVES_CASE(BRAWN_UB)
+        GENERATE_MOVES_CASE(KNIGHT_W)
+        GENERATE_MOVES_CASE(KNIGHT_B)
+        GENERATE_MOVES_CASE(UNICORN_W)
+        GENERATE_MOVES_CASE(UNICORN_B)
+        GENERATE_MOVES_CASE(DRAGON_W)
+        GENERATE_MOVES_CASE(DRAGON_B)
+#undef GENERATE_MOVES_CASE
+    case NO_PIECE:
+        throw std::runtime_error("gen_moves_unsafe: applied on NO_PIECE\n");
+        break;
+    default:
+        throw std::runtime_error("gen_moves_unsafe: Unknown piece " + std::string({ (char)piece_name(p_piece) }) + (p_piece & 0x80 ? "*" : "") + "\n");
+        break;
+    }
+}
+
+template<bool C>
+bitboard_t multiverse::gen_physical_moves_unsafe(vec4 p) const
+{
+    std::shared_ptr<board> b_ptr = get_board(p.l(), p.t(), C);
+    piece_t p_piece = b_ptr->get_piece(p.xy());
+    if (b_ptr->umove() & pmask(p.xy()))
+    {
+        p_piece = static_cast<piece_t>(p_piece | 0x80);
+    }
+    switch (p_piece)
+    {
+#define GENERATE_MOVES_CASE(PIECE) \
+        case PIECE: \
+            return gen_physical_moves_impl<PIECE, C, true>(p);
+
+        GENERATE_MOVES_CASE(KING_W)
+        GENERATE_MOVES_CASE(KING_B)
+        GENERATE_MOVES_CASE(KING_UW)
+        GENERATE_MOVES_CASE(KING_UB)
+        GENERATE_MOVES_CASE(COMMON_KING_W)
+        GENERATE_MOVES_CASE(COMMON_KING_B)
+        GENERATE_MOVES_CASE(ROOK_W)
+        GENERATE_MOVES_CASE(ROOK_B)
+        GENERATE_MOVES_CASE(ROOK_UW)
+        GENERATE_MOVES_CASE(ROOK_UB)
+        GENERATE_MOVES_CASE(BISHOP_W)
+        GENERATE_MOVES_CASE(BISHOP_B)
+        GENERATE_MOVES_CASE(QUEEN_W)
+        GENERATE_MOVES_CASE(QUEEN_B)
+        GENERATE_MOVES_CASE(ROYAL_QUEEN_W)
+        GENERATE_MOVES_CASE(ROYAL_QUEEN_B)
+        GENERATE_MOVES_CASE(PRINCESS_W)
+        GENERATE_MOVES_CASE(PRINCESS_B)
+        GENERATE_MOVES_CASE(PAWN_W)
+        GENERATE_MOVES_CASE(BRAWN_W)
+        GENERATE_MOVES_CASE(PAWN_B)
+        GENERATE_MOVES_CASE(BRAWN_B)
+        GENERATE_MOVES_CASE(PAWN_UW)
+        GENERATE_MOVES_CASE(BRAWN_UW)
+        GENERATE_MOVES_CASE(PAWN_UB)
+        GENERATE_MOVES_CASE(BRAWN_UB)
+        GENERATE_MOVES_CASE(KNIGHT_W)
+        GENERATE_MOVES_CASE(KNIGHT_B)
+        GENERATE_MOVES_CASE(UNICORN_W)
+        GENERATE_MOVES_CASE(UNICORN_B)
+        GENERATE_MOVES_CASE(DRAGON_W)
+        GENERATE_MOVES_CASE(DRAGON_B)
+#undef GENERATE_MOVES_CASE
+    default:
+        throw std::runtime_error("gen_physical_moves_unsafe: Unknown piece " + std::string({ (char)piece_name(p_piece) }) + (p_piece & 0x80 ? "*" : "") + "\n");
+        break;
+    }
+}
+
 generator<vec4> multiverse::gen_piece_move(vec4 p, bool board_color) const
 {
     movegen_t gen = board_color ? gen_moves<true>(p) : gen_moves<false>(p);
@@ -437,6 +550,19 @@ generator<vec4> multiverse::gen_piece_move(vec4 p, bool board_color) const
         {
             vec4 q = vec4(pos, r);
 			co_yield q;
+        }
+    }
+}
+
+generator<vec4> multiverse::gen_piece_move_unsafe(vec4 p, bool board_color) const
+{
+    movegen_t gen = board_color ? gen_moves_unsafe<true>(p) : gen_moves_unsafe<false>(p);
+    for (const auto& [r, bb] : gen)
+    {
+        for(int pos : marked_pos(bb))
+        {
+            vec4 q = vec4(pos, r);
+            co_yield q;
         }
     }
 }
@@ -546,7 +672,7 @@ std::vector<std::pair<vec4, bitboard_t>> multiverse::gen_purely_sp_knight_moves(
 }
 
 
-template<piece_t P, bool C>
+template<piece_t P, bool C, bool UNSAFE>
 bitboard_t multiverse::gen_physical_moves_impl(vec4 p) const
 {
 	std::shared_ptr<board> b_ptr = get_board(p.l(), p.t(), C);
@@ -564,7 +690,31 @@ bitboard_t multiverse::gen_physical_moves_impl(vec4 p) const
     {
         a = king_attack(p.xy()) & ~friendly;
         bitboard_t urook = b_ptr->umove() & b_ptr->rook() & friendly;
-        if(!b_ptr->is_under_attack(p.xy(), C))
+        if constexpr (UNSAFE)
+        {
+            for(vec4 d : {vec4(1,0,0,0), vec4(-1,0,0,0)})
+            {
+                int i = 0;
+                for(vec4 q = p + d; !q.outbound(); q = q + d)
+                {
+                    bitboard_t w = pmask(q.xy());
+                    if(w & urook)
+                    {
+                        if((q+d).outbound())
+                        {
+                            a |= pmask((p + d + d).xy());
+                        }
+                        break;
+                    }
+                    else if(w & b_ptr->occupied())
+                    {
+                        break;
+                    }
+                    i++;
+                }
+            }
+        }
+        else if(!b_ptr->is_under_attack(p.xy(), C))
         {
             for(vec4 d : {vec4(1,0,0,0), vec4(-1,0,0,0)})
             {
@@ -739,12 +889,12 @@ void multiverse::gen_compound_moves(vec4 p, std::map<vec4, bitboard_t>& result) 
     }
 }
 
-template<piece_t P, bool C, bool ONLY_SP>
+template<piece_t P, bool C, bool ONLY_SP, bool UNSAFE>
 movegen_t multiverse::gen_moves_impl(vec4 p) const
 {
     if constexpr (!ONLY_SP)
     {
-        bitboard_t bb = gen_physical_moves_impl<P, C>(p);
+        bitboard_t bb = gen_physical_moves_impl<P, C, UNSAFE>(p);
         if(bb)
         {
             // only generate this entry when there is at least one physical move
@@ -1082,12 +1232,16 @@ generator<vec4> multiverse::gen_board_move_impl(vec4 p0) const
 
 // Explicit instantiation of the template for specific types
 #define INIT_TEMPLATE(PIECE) \
-template bitboard_t multiverse::gen_physical_moves_impl<PIECE, true>(vec4 p) const; \
-template bitboard_t multiverse::gen_physical_moves_impl<PIECE, false>(vec4 p) const; \
-template movegen_t multiverse::gen_moves_impl<PIECE, true, true>(vec4 p) const; \
-template movegen_t multiverse::gen_moves_impl<PIECE, false, true>(vec4 p) const; \
-template movegen_t multiverse::gen_moves_impl<PIECE, true, false>(vec4 p) const; \
-template movegen_t multiverse::gen_moves_impl<PIECE, false, false>(vec4 p) const;
+template bitboard_t multiverse::gen_physical_moves_impl<PIECE, true, false>(vec4 p) const; \
+template bitboard_t multiverse::gen_physical_moves_impl<PIECE, false, false>(vec4 p) const; \
+template bitboard_t multiverse::gen_physical_moves_impl<PIECE, true, true>(vec4 p) const; \
+template bitboard_t multiverse::gen_physical_moves_impl<PIECE, false, true>(vec4 p) const; \
+template movegen_t multiverse::gen_moves_impl<PIECE, true, true, false>(vec4 p) const; \
+template movegen_t multiverse::gen_moves_impl<PIECE, false, true, false>(vec4 p) const; \
+template movegen_t multiverse::gen_moves_impl<PIECE, true, false, false>(vec4 p) const; \
+template movegen_t multiverse::gen_moves_impl<PIECE, false, false, false>(vec4 p) const; \
+template movegen_t multiverse::gen_moves_impl<PIECE, true, false, true>(vec4 p) const; \
+template movegen_t multiverse::gen_moves_impl<PIECE, false, false, true>(vec4 p) const;
 
 INIT_TEMPLATE(KING_W)
 INIT_TEMPLATE(KING_B)
@@ -1140,12 +1294,16 @@ template void multiverse::gen_compound_moves<true, multiverse::axesmode::BOTH, m
 
 template bitboard_t multiverse::gen_physical_moves<true>(vec4 p) const;
 template bitboard_t multiverse::gen_physical_moves<false>(vec4 p) const;
+template bitboard_t multiverse::gen_physical_moves_unsafe<true>(vec4 p) const;
+template bitboard_t multiverse::gen_physical_moves_unsafe<false>(vec4 p) const;
 
 template movegen_t multiverse::gen_superphysical_moves<true>(vec4 p) const;
 template movegen_t multiverse::gen_superphysical_moves<false>(vec4 p) const;
 
 template movegen_t multiverse::gen_moves<true>(vec4 p) const;
 template movegen_t multiverse::gen_moves<false>(vec4 p) const;
+template movegen_t multiverse::gen_moves_unsafe<true>(vec4 p) const;
+template movegen_t multiverse::gen_moves_unsafe<false>(vec4 p) const;
 
 template std::vector<std::tuple<int,int,bool,std::string>> multiverse::get_boards<true>() const;
 template std::vector<std::tuple<int,int,bool,std::string>> multiverse::get_boards<false>() const;

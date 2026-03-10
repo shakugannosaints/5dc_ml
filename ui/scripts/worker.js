@@ -41,7 +41,7 @@ createModule().then((engine) => {
         }
     }
 
-    function viewGame() {
+    function viewGame(afterSubmit) {
         if (self.game === null) {
             self.postMessage({ type: 'alert', message: 'No game loaded.' });
             return;
@@ -162,6 +162,10 @@ createModule().then((engine) => {
         if(checking) {
             data.fade = 0.8;
         }
+        if(afterSubmit) {
+            data.afterSubmit = true;
+            console.log('[WORKER-DBG] viewGame sending data with afterSubmit=true, present.c=', present.c);
+        }
         self.postMessage({
             type: 'data',
             data: data,
@@ -242,7 +246,7 @@ createModule().then((engine) => {
             updateSelect();
             updateButtons();
             updateHudStatus();
-            viewGame();
+            viewGame(true);  // afterSubmit=true
         } else if (data.type === 'undo') {
             self.game.undo();
             updateButtons();

@@ -396,3 +396,104 @@
     height: 42px;
     padding: 9px;
 }
+
+/* ================= AI Opponent Popup ================= */
+.ai-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: rgba(0,0,0,0.04);
+    border-radius: 6px;
+    margin-bottom: 12px;
+    font-size: 0.9em;
+}
+
+.ai-status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #ccc;
+    flex-shrink: 0;
+    transition: background 0.3s;
+}
+
+.ai-status-dot.connected {
+    background: #4caf50;
+    box-shadow: 0 0 6px rgba(76,175,80,0.5);
+}
+
+.ai-status-dot.thinking {
+    background: #ff9800;
+    animation: ai-pulse 1s ease-in-out infinite;
+}
+
+.ai-status-dot.error {
+    background: #f44336;
+}
+
+@keyframes ai-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.85); }
+}
+
+.ai-model-info {
+    font-size: 0.85em;
+}
+
+.ai-info-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 0;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+
+.ai-info-row:last-child {
+    border-bottom: none;
+}
+
+.ai-info-row span:first-child {
+    color: #666;
+    font-weight: 500;
+}
+
+.ai-info-row span:last-child {
+    color: #333;
+    text-align: right;
+    max-width: 65%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* AI thinking overlay on HUD */
+.hud-title .ai-thinking-indicator {
+    display: inline-block;
+    margin-left: 8px;
+    font-size: 0.85em;
+    color: #ff9800;
+    animation: ai-blink 1.2s ease-in-out infinite;
+}
+
+@keyframes ai-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+/* AI button highlight when active */
+#btnAI.ai-active {
+    color: #4caf50;
+    position: relative;
+}
+
+#btnAI.ai-active::after {
+    content: '';
+    position: absolute;
+    bottom: 2px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #4caf50;
+}

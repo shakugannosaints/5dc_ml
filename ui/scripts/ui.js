@@ -540,6 +540,74 @@ export const UI = (() => {
         showPopup(event.currentTarget, 'popupSettings');
     };
 
+    /* ================= AI Opponent Popup ================= */
+    document.getElementById('btnAI').onclick = (event) => {
+        showPopup(event.currentTarget, 'popupAI');
+        // Trigger status check when opening
+        if (aiStatusCallback) aiStatusCallback();
+    };
+
+    let aiStatusCallback = null;
+    let aiEnableCallback = null;
+    let aiReloadCallback = null;
+
+    const aiEnabledCheckbox = document.getElementById('aiEnabled');
+    const aiColorSelect = document.getElementById('aiColor');
+    const aiTemperatureSlider = document.getElementById('aiTemperature');
+    const aiTempValueLabel = document.getElementById('aiTempValue');
+    const aiBtnEl = document.getElementById('btnAI');
+
+    // Temperature slider live update
+    if (aiTemperatureSlider) {
+        aiTemperatureSlider.addEventListener('input', () => {
+            aiTempValueLabel.textContent = aiTemperatureSlider.value;
+        });
+    }
+
+    // AI enabled toggle
+    if (aiEnabledCheckbox) {
+        aiEnabledCheckbox.addEventListener('change', () => {
+            const enabled = aiEnabledCheckbox.checked;
+            if (enabled) {
+                aiBtnEl.classList.add('ai-active');
+            } else {
+                aiBtnEl.classList.remove('ai-active');
+            }
+            if (aiEnableCallback) {
+                aiEnableCallback(enabled);
+            }
+        });
+    }
+
+    // Connect button
+    document.getElementById('aiConnectBtn').onclick = () => {
+        if (aiStatusCallback) aiStatusCallback();
+    };
+
+    // Reload model button
+    document.getElementById('aiReloadBtn').onclick = () => {
+        if (aiReloadCallback) aiReloadCallback();
+    };
+
+    // AI status update helpers
+    function setAIStatusInternal(status, text) {
+        const dot = document.getElementById('aiStatusDot');
+        const textEl = document.getElementById('aiStatusText');
+        dot.className = 'ai-status-dot';
+        if (status === 'connected') dot.classList.add('connected');
+        else if (status === 'thinking') dot.classList.add('thinking');
+        else if (status === 'error') dot.classList.add('error');
+        textEl.textContent = text || status;
+    }
+
+    function setAIModelInfoInternal(info) {
+        document.getElementById('aiInfoStatus').textContent = info.loaded ? 'Loaded' : 'Not loaded';
+        document.getElementById('aiInfoCheckpoint').textContent = info.checkpoint 
+            ? info.checkpoint.split(/[/\\]/).pop() : '—';
+        document.getElementById('aiInfoEpoch').textContent = info.epoch || '—';
+        document.getElementById('aiInfoDevice').textContent = info.device || '—';
+    }
+
     // Settings change callback wiring
     let settingsChangeCallback = null;
     const allowSubmitCheckbox = document.getElementById('allowSubmitWithChecks');
@@ -1163,6 +1231,68 @@ export const UI = (() => {
                 exportMate: exportMateCheckbox.checked,
                 exportShortNotation: exportShortNotationCheckbox.checked
             };
+        },
+
+        /* ================= AI Opponent API ================= */
+
+        /**
+         * Set callback for when AI popup opens (to check server status)
+         */
+        setAIStatusCallback(callback) {
+            aiStatusCallback = callback;
+        },
+
+        /**
+         * Set callback for when AI is enabled/disabled
+         */
+        setAIEnableCallback(callback) {
+            aiEnableCallback = callback;
+        },
+
+        /**
+         * Set callback for model reload button
+         */
+        setAIReloadCallback(callback) {
+            aiReloadCallback = callback;
+        },
+
+        /**
+         * Get current AI settings
+         */
+        getAISettings() {
+            return {
+                enabled: aiEnabledCheckbox ? aiEnabledCheckbox.checked : false,
+                color: aiColorSelect ? aiColorSelect.value : 'black',
+                temperature: aiTemperatureSlider ? parseFloat(aiTemperatureSlider.value) : 0.5,
+            };
+        },
+
+        /**
+         * Update AI connection status display
+         */
+        setAIStatus(status, text) {
+            setAIStatusInternal(status, text);
+        },
+
+        /**
+         * Update AI model info display
+         */
+        setAIModelInfo(info) {
+            setAIModelInfoInternal(info);
+        },
+
+        /**
+         * Check if AI is enabled
+         */
+        isAIEnabled() {
+            return aiEnabledCheckbox ? aiEnabledCheckbox.checked : false;
+        },
+
+        /**
+         * Get the AI color setting ('black' or 'white')
+         */
+        getAIColor() {
+            return aiColorSelect ? aiColorSelect.value : 'black';
         }
     };
 })();

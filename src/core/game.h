@@ -47,7 +47,9 @@ public:
     bool undo();
     bool redo();
     bool apply_move(ext_move m);
+    bool apply_move_unsafe(ext_move m);
     bool submit();
+    bool submit_unsafe();
     bool currently_check() const;
     std::vector<std::pair<vec4,vec4>> get_current_checks() const;
     std::pair<int, int> get_board_size() const;

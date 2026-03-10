@@ -112,6 +112,8 @@ public:
     
     std::vector<vec4> gen_movable_pieces() const;
     std::vector<vec4> get_movable_pieces(std::vector<int> lines) const;
+    std::vector<vec4> gen_movable_pieces_unsafe() const;
+    std::vector<vec4> get_movable_pieces_unsafe(std::vector<int> lines) const;
     
     
     /*
@@ -167,6 +169,8 @@ public:
     std::vector<std::tuple<int,int,bool,std::string>> get_boards() const;
     generator<vec4> gen_piece_move(vec4 p) const;
     generator<vec4> gen_piece_move(vec4 p, bool c) const;
+    generator<vec4> gen_piece_move_unsafe(vec4 p) const;
+    generator<vec4> gen_piece_move_unsafe(vec4 p, bool c) const;
     std::string to_string() const;
     std::string show_fen() const;
     

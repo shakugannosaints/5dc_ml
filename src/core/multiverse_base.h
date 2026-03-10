@@ -40,10 +40,10 @@ private:
     std::vector<int> timeline_start, timeline_end;
     
     // private methods for move generation
-    template<piece_t P, bool C>
+    template<piece_t P, bool C, bool UNSAFE>
     bitboard_t gen_physical_moves_impl(vec4 p) const;
 
-    template<piece_t P, bool C, bool ONLY_SP>
+    template<piece_t P, bool C, bool ONLY_SP, bool UNSAFE>
     movegen_t gen_moves_impl(vec4 p) const;
 
     template<bool C>
@@ -112,9 +112,12 @@ public:
     
     // move generation
     template<bool C> bitboard_t gen_physical_moves(vec4 p) const;
+    template<bool C> bitboard_t gen_physical_moves_unsafe(vec4 p) const;
     template<bool C> movegen_t gen_superphysical_moves(vec4 p) const;
     template<bool C> movegen_t gen_moves(vec4 p) const;
+    template<bool C> movegen_t gen_moves_unsafe(vec4 p) const;
     generator<vec4> gen_piece_move(vec4 p, bool board_color) const;
+    generator<vec4> gen_piece_move_unsafe(vec4 p, bool board_color) const;
     
     // help functions
     bool inbound(vec4 a, bool color) const;

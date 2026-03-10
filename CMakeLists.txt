@@ -66,6 +66,7 @@ endif()
 option(TEST "Build test executable" ON)
 option(PYMODULE "Build Python module" OFF)
 option(EMMODULE "Build Emscripten/WebAssembly module" OFF)
+option(ONNX_SELFPLAY "Build C++ ONNX self-play executable" OFF)
 
 # Enable testing if TEST option is ON
 if(TEST)
@@ -219,6 +220,42 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
             LINK_FLAGS "${EMSCRIPTEN_LINK_FLAGS}"
             OUTPUT_NAME "engine"
             SUFFIX ".js"
+        )
+    endif()
+
+    if(ONNX_SELFPLAY)
+        if(NOT WIN32)
+            message(FATAL_ERROR "ONNX_SELFPLAY is currently supported on Windows only.")
+        endif()
+
+        set(ONNXRUNTIME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/extern/onnxruntime-win-x64-1.24.3" CACHE PATH
+            "Path to a prebuilt ONNX Runtime SDK")
+        set(ONNXRUNTIME_INCLUDE_DIR "${ONNXRUNTIME_ROOT}/include")
+        set(ONNXRUNTIME_LIB "${ONNXRUNTIME_ROOT}/lib/onnxruntime.lib")
+        set(ONNXRUNTIME_DLL "${ONNXRUNTIME_ROOT}/lib/onnxruntime.dll")
+        set(ONNXRUNTIME_SHARED_DLL "${ONNXRUNTIME_ROOT}/lib/onnxruntime_providers_shared.dll")
+
+        if(NOT EXISTS "${ONNXRUNTIME_INCLUDE_DIR}/onnxruntime_cxx_api.h")
+            message(FATAL_ERROR "ONNX Runtime headers not found under ${ONNXRUNTIME_INCLUDE_DIR}")
+        endif()
+        if(NOT EXISTS "${ONNXRUNTIME_LIB}")
+            message(FATAL_ERROR "ONNX Runtime import library not found: ${ONNXRUNTIME_LIB}")
+        endif()
+
+        add_executable(az_selfplay_onnx "src/tools/az_selfplay_onnx.cpp")
+        target_link_libraries(az_selfplay_onnx PRIVATE 5dchess_engine_core "${ONNXRUNTIME_LIB}")
+        target_include_directories(az_selfplay_onnx PRIVATE "${ONNXRUNTIME_INCLUDE_DIR}")
+        target_compile_definitions(az_selfplay_onnx PRIVATE
+            PROJECT_VERSION_STRING="${PROJECT_VERSION}"
+        )
+
+        add_custom_command(TARGET az_selfplay_onnx POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNXRUNTIME_DLL}"
+                $<TARGET_FILE_DIR:az_selfplay_onnx>
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNXRUNTIME_SHARED_DLL}"
+                $<TARGET_FILE_DIR:az_selfplay_onnx>
         )
     endif()
 else()
