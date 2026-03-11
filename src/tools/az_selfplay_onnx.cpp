@@ -135,6 +135,7 @@ struct SearchConfig {
     int temperature_threshold = 30;
     int min_board_limit = 15;
     int max_board_limit = 25;
+    float material_scale = 2.0f;
     int max_game_length = 0;
     int num_games = 1;
     std::string provider = "cpu";
@@ -416,12 +417,13 @@ void apply_variant_preset(SearchConfig& cfg, const std::string& variant_name) {
 
 class CaptureKingEnv {
 public:
-    CaptureKingEnv(std::string variant_pgn, int board_limit, int board_side, int board_squares, int line_shift)
+    CaptureKingEnv(std::string variant_pgn, int board_limit, int board_side, int board_squares, int line_shift, float material_scale)
         : variant_pgn_(std::move(variant_pgn)),
           board_limit_(board_limit),
           board_side_(board_side),
           board_squares_(board_squares),
           line_shift_(line_shift),
+          material_scale_(material_scale),
           game_(game::from_pgn(variant_pgn_)) {
         reset();
     }
@@ -433,6 +435,7 @@ public:
         last_semimove_.reset();
         done_ = false;
         outcome_ = 0.0f;
+        terminal_reason_.clear();
         total_semimoves_ = 0;
     }
 
@@ -463,9 +466,10 @@ public:
     }
 
     [[nodiscard]] CaptureKingEnv clone() const {
-        CaptureKingEnv clone(variant_pgn_, board_limit_, board_side_, board_squares_, line_shift_);
+        CaptureKingEnv clone(variant_pgn_, board_limit_, board_side_, board_squares_, line_shift_, material_scale_);
         clone.done_ = done_;
         clone.outcome_ = outcome_;
+        clone.terminal_reason_ = terminal_reason_;
         clone.total_semimoves_ = total_semimoves_;
 
         for (const auto& turn : turn_history_) {
@@ -558,6 +562,7 @@ public:
         if (capture_outcome.has_value()) {
             done_ = true;
             outcome_ = *capture_outcome;
+            terminal_reason_ = "capture_king";
         }
         return true;
     }
@@ -742,7 +747,7 @@ private:
         const auto [white_material, black_material] = material_count();
         const float total = static_cast<float>(white_material + black_material) + 1e-8f;
         const float diff = static_cast<float>(white_material - black_material);
-        return std::tanh(diff / total * 3.0f);
+        return std::tanh(diff / total * material_scale_);
     }
 
     [[nodiscard]] std::optional<float> check_terminal() {
@@ -752,22 +757,31 @@ private:
         if (board_count() >= board_limit_) {
             done_ = true;
             outcome_ = material_score();
+            terminal_reason_ = "material";
             return outcome_;
         }
         return std::nullopt;
     }
 
+public:
+    [[nodiscard]] const std::string& terminal_reason() const {
+        return terminal_reason_;
+    }
+
+private:
     std::string variant_pgn_;
     int board_limit_ = 25;
     int board_side_ = 4;
     int board_squares_ = 16;
     int line_shift_ = kDefaultLineShift;
+    float material_scale_ = 2.0f;
     game game_;
     std::vector<std::vector<Semimove>> turn_history_;
     std::vector<Semimove> pending_semimoves_;
     std::optional<Semimove> last_semimove_;
     bool done_ = false;
     float outcome_ = 0.0f;
+    std::string terminal_reason_;
     int total_semimoves_ = 0;
 };
 
@@ -1277,7 +1291,14 @@ private:
     }
 
     [[nodiscard]] GameResult play_game(int board_limit) {
-        CaptureKingEnv env(cfg_.variant_pgn, board_limit, cfg_.board_side, cfg_.board_squares, cfg_.line_shift);
+        CaptureKingEnv env(
+            cfg_.variant_pgn,
+            board_limit,
+            cfg_.board_side,
+            cfg_.board_squares,
+            cfg_.line_shift,
+            cfg_.material_scale
+        );
         GameResult result;
         result.board_limit = board_limit;
         const bool use_max_game_length = cfg_.max_game_length > 0;
@@ -1316,7 +1337,7 @@ private:
                 });
                 if (outcome.has_value()) {
                     result.outcome = *outcome;
-                    result.terminal_reason = "capture_king_or_material";
+                    result.terminal_reason = env.terminal_reason();
                 }
             } else {
                 const std::string move_text = env.format_move(search_result.action.semimove);
@@ -1332,7 +1353,7 @@ private:
                 });
                 if (env.done()) {
                     result.outcome = env.outcome();
-                    result.terminal_reason = "capture_king_or_material";
+                    result.terminal_reason = env.terminal_reason();
                 }
             }
         }
@@ -1345,7 +1366,7 @@ private:
             result.terminal_reason = "max_game_length";
         } else if (result.terminal_reason.empty()) {
             result.outcome = env.outcome();
-            result.terminal_reason = "capture_king_or_material";
+            result.terminal_reason = env.terminal_reason();
         }
         result.total_semimoves = env.total_semimoves();
         result.pgn = env.show_pgn(state::SHOW_CAPTURE | state::SHOW_PROMOTION);
@@ -1411,6 +1432,8 @@ private:
             cfg.min_board_limit = std::stoi(require_value("--min-board-limit"));
         } else if (arg == "--max-board-limit") {
             cfg.max_board_limit = std::stoi(require_value("--max-board-limit"));
+        } else if (arg == "--material-scale") {
+            cfg.material_scale = std::stof(require_value("--material-scale"));
         } else if (arg == "--max-game-length") {
             cfg.max_game_length = std::stoi(require_value("--max-game-length"));
         } else if (arg == "--temperature") {
@@ -1450,6 +1473,7 @@ private:
                 << "  --sims N                     MCTS simulations per semimove (default: 200)\n"
                 << "  --min-board-limit N          Minimum board limit (default: 15)\n"
                 << "  --max-board-limit N          Maximum board limit (default: 25)\n"
+                << "  --material-scale X           Tanh scale for board-limit material scoring (default: 2.0)\n"
                 << "  --max-game-length N          Max semimoves before forced stop; <=0 disables (default: 0)\n"
                 << "  --temperature X              Early-game visit temperature (default: 1.0)\n"
                 << "  --temperature-final X        Late-game visit temperature (default: 0.1)\n"

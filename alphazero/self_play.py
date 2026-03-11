@@ -231,6 +231,7 @@ class SelfPlayWorker:
             board_limit=board_limit,
             legal_cache_max_entries=self.sp_cfg.legal_cache_max_entries,
             rules_mode=self.sp_cfg.rules_mode,
+            material_scale=self.sp_cfg.material_scale,
         )
         env.reset()
 
@@ -321,9 +322,9 @@ class SelfPlayWorker:
         if env.done and env.outcome is not None:
             game_outcome = env.outcome  # white perspective
             if self.sp_cfg.rules_mode == "capture_king":
-                record.terminal_reason = "capture_king_or_material"
+                record.terminal_reason = env.terminal_reason or "capture_king"
             else:
-                record.terminal_reason = "checkmate_or_material"
+                record.terminal_reason = env.terminal_reason or "checkmate"
         elif terminated_by_no_action:
             game_outcome = 0.0
             record.terminal_reason = "no_legal_action"
@@ -596,6 +597,7 @@ class CppOnnxSelfPlayWorker:
                     "--sims", str(max(1, min(4, int(self.mcts_cfg.num_simulations)))),
                     "--min-board-limit", str(self.sp_cfg.min_board_limit),
                     "--max-board-limit", str(self.sp_cfg.min_board_limit),
+                    "--material-scale", str(self.sp_cfg.material_scale),
                     "--max-game-length", str(self.sp_cfg.max_game_length),
                     "--temperature", str(self.sp_cfg.temperature),
                     "--temperature-final", str(self.sp_cfg.temperature_final),
@@ -684,6 +686,7 @@ class CppOnnxSelfPlayWorker:
             "--sims", str(self.mcts_cfg.num_simulations),
             "--min-board-limit", str(self.sp_cfg.min_board_limit),
             "--max-board-limit", str(self.sp_cfg.max_board_limit),
+            "--material-scale", str(self.sp_cfg.material_scale),
             "--max-game-length", str(self.sp_cfg.max_game_length),
             "--temperature", str(self.sp_cfg.temperature),
             "--temperature-final", str(self.sp_cfg.temperature_final),
@@ -782,6 +785,7 @@ class CppOnnxSelfPlayWorker:
             "--sims", str(self.mcts_cfg.num_simulations),
             "--min-board-limit", str(self.sp_cfg.min_board_limit),
             "--max-board-limit", str(self.sp_cfg.max_board_limit),
+            "--material-scale", str(self.sp_cfg.material_scale),
             "--max-game-length", str(self.sp_cfg.max_game_length),
             "--temperature", str(self.sp_cfg.temperature),
             "--temperature-final", str(self.sp_cfg.temperature_final),

@@ -284,11 +284,12 @@ class Trainer:
             games = self.worker.generate_games()
 
         snapshot_games = []
+        snapshot_interval = int(getattr(self.cfg.self_play, "pgn_snapshot_interval", 100))
         for game in games:
             self.replay_buffer.push_game(game)
             self.total_games += 1
             self.total_samples += len(game.samples)
-            if self.total_games % 100 == 0:
+            if snapshot_interval > 0 and self.total_games % snapshot_interval == 0:
                 snapshot_games.append((self.total_games, game))
 
         # Log game stats
@@ -305,7 +306,7 @@ class Trainer:
                      f"draws: {sum(1 for o in outcomes if o == 0)}")
         logger.info(f"  Termination reasons: {reasons}")
 
-        # Persist one importable PGN snapshot for every 100 completed games.
+        # Persist importable PGN snapshots at the configured game interval.
         self._log_sample_games(games, snapshot_games)
 
     def _training_phase(self) -> dict:
@@ -533,6 +534,8 @@ def main():
     parser.add_argument('--iterations', type=int, default=None,
                         help="Number of NEW iterations to run (added on top of resumed progress)")
     parser.add_argument('--games', type=int, default=None, help="Games per iteration")
+    parser.add_argument('--pgn-snapshot-interval', type=int, default=None,
+                        help="Save one PGN snapshot every N completed games; <=0 disables snapshots")
     parser.add_argument('--sims', type=int, default=None, help="MCTS simulations per move")
     parser.add_argument('--min-board-limit', type=int, default=None,
                         help="Minimum board-count limit for self-play termination")
@@ -578,6 +581,8 @@ def main():
         cfg.device = "cpu"
     if args.games:
         cfg.self_play.num_games = args.games
+    if args.pgn_snapshot_interval is not None:
+        cfg.self_play.pgn_snapshot_interval = int(args.pgn_snapshot_interval)
     if args.sims:
         cfg.mcts.num_simulations = args.sims
     if args.min_board_limit:

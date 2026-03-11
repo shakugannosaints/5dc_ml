@@ -120,7 +120,8 @@ class SemimoveEnv:
     def __init__(self, variant_pgn: str, board_limit: int = 999,
                  shared_legal_cache: Optional[OrderedDict] = None,
                  legal_cache_max_entries: int = 20000,
-                 rules_mode: str = RULE_CAPTURE_KING):
+                 rules_mode: str = RULE_CAPTURE_KING,
+                 material_scale: float = 2.0):
         self.variant_pgn = variant_pgn
         self.variant = infer_variant_profile_from_pgn(variant_pgn)
         self.board_side = self.variant.board_side
@@ -129,12 +130,14 @@ class SemimoveEnv:
         self.l_coord_shift = self.variant.l_coord_shift
         self.board_limit = board_limit
         self.rules_mode = rules_mode
+        self.material_scale = material_scale
         self.game: Optional[engine.game] = None
         self.pending_semimoves: list[Semimove] = []
         self.last_semimove: Optional[Semimove] = None
         self.turn_history: list[list[Semimove]] = []  # completed turns
         self.done = False
         self.outcome: Optional[float] = None
+        self.terminal_reason: Optional[str] = None
         self.total_semimoves = 0
         self._state_version = 0
         self._legal_action_cache_version = -1
@@ -156,6 +159,7 @@ class SemimoveEnv:
         self.turn_history = []
         self.done = False
         self.outcome = None
+        self.terminal_reason = None
         self.total_semimoves = 0
         self._state_version = 0
         self._invalidate_legal_cache()
@@ -448,6 +452,7 @@ class SemimoveEnv:
                 if capture_outcome is not None:
                     self.done = True
                     self.outcome = capture_outcome
+                    self.terminal_reason = "capture_king"
             return result
 
         # Keep transitions inside engine-legal action prefixes and derive the
@@ -499,6 +504,7 @@ class SemimoveEnv:
         if self.board_count >= self.board_limit:
             self.done = True
             self.outcome = self._material_score()
+            self.terminal_reason = "material"
             return self.outcome
 
         if not self.uses_strict_legal_enumeration:
@@ -509,14 +515,17 @@ class SemimoveEnv:
         if status == engine.match_status_t.WHITE_WINS:
             self.done = True
             self.outcome = 1.0
+            self.terminal_reason = "checkmate"
             return 1.0
         elif status == engine.match_status_t.BLACK_WINS:
             self.done = True
             self.outcome = -1.0
+            self.terminal_reason = "checkmate"
             return -1.0
         elif status == engine.match_status_t.STALEMATE:
             self.done = True
             self.outcome = 0.0
+            self.terminal_reason = "stalemate"
             return 0.0
 
         return None
@@ -526,7 +535,7 @@ class SemimoveEnv:
         w, b = self.state.material_count()
         total = w + b + 1e-8
         diff = w - b
-        return math.tanh(diff / total * 3.0)
+        return math.tanh(diff / total * self.material_scale)
 
     # 鈹€鈹€鈹€ Cloning for MCTS 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
@@ -545,8 +554,10 @@ class SemimoveEnv:
         clone.l_coord_shift = self.l_coord_shift
         clone.board_limit = self.board_limit
         clone.rules_mode = self.rules_mode
+        clone.material_scale = self.material_scale
         clone.done = self.done
         clone.outcome = self.outcome
+        clone.terminal_reason = self.terminal_reason
         clone.total_semimoves = self.total_semimoves
         clone._state_version = self._state_version
         clone._legal_action_cache_version = -1

@@ -64,11 +64,13 @@ class SelfPlayConfig:
     min_board_limit: int = 15            # minimum board count before forced end
     max_board_limit: int = 25           # maximum board count for forced end
     # Material scoring
-    material_scale: float = 3.0         # tanh scaling for material difference
+    material_scale: float = 2.0         # tanh scaling for material difference
     # Optional game-length safety fuse. <= 0 means disabled.
     max_game_length: int = 0            # max semimoves before forced end (disabled by default)
     # Number of games per iteration
     num_games: int = 64
+    # Save one importable PGN snapshot every N completed games. <= 0 disables it.
+    pgn_snapshot_interval: int = 100
     # Per-game legal-action LRU cache size in semimove env
     legal_cache_max_entries: int = 4000
     # Parallel workers for self-play game generation (CPU only)
