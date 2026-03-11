@@ -69,21 +69,6 @@ struct Semimove {
 
     [[nodiscard]] bool operator==(const Semimove& other) const = default;
 
-    [[nodiscard]] bool is_commutable_with(const Semimove& other) const {
-        if (line_idx == other.line_idx) {
-            return false;
-        }
-        const bool self_local = from.l() == to.l();
-        const bool other_local = other.from.l() == other.to.l();
-        if (self_local && other_local) {
-            return true;
-        }
-        if (to.l() == other.line_idx || other.to.l() == line_idx) {
-            return false;
-        }
-        return true;
-    }
-
     [[nodiscard]] ext_move to_ext_move() const {
         return ext_move(from, to);
     }
@@ -347,6 +332,10 @@ private:
     return current_player == 0 ? outcome_white : -outcome_white;
 }
 
+[[nodiscard]] float no_legal_action_terminal_value() {
+    return -1.0f;
+}
+
 [[nodiscard]] std::string outcome_text(float outcome) {
     if (outcome == 1.0f) {
         return "White wins";
@@ -533,11 +522,7 @@ public:
         process_lines(mandatory);
         process_lines(optional_lines);
 
-        std::vector<Semimove> filtered_semimoves = apply_lexicographic_filter(semimoves);
-        if (filtered_semimoves.empty() && !semimoves.empty() && !mandatory.empty()) {
-            filtered_semimoves = semimoves;
-        }
-        return {filtered_semimoves, mandatory.empty()};
+        return {apply_lexicographic_filter(semimoves), mandatory.empty()};
     }
 
     [[nodiscard]] bool apply_semimove(const Semimove& sm, bool validate = true) {
@@ -698,7 +683,7 @@ private:
         std::vector<Semimove> filtered;
         filtered.reserve(semimoves.size());
         for (const auto& sm : semimoves) {
-            if (sm.is_commutable_with(*last_semimove_) && sm.sort_key() < last_semimove_->sort_key()) {
+            if (semimoves_are_commutable(sm, *last_semimove_) && sm.sort_key() < last_semimove_->sort_key()) {
                 continue;
             }
             filtered.push_back(sm);
@@ -769,6 +754,37 @@ public:
     }
 
 private:
+    [[nodiscard]] bool is_playable_board_coord(int t, int l) const {
+        const auto [mandatory, optional_lines, unplayable] = state_ref().get_timeline_status();
+        (void)unplayable;
+        const bool playable_line =
+            std::find(mandatory.begin(), mandatory.end(), l) != mandatory.end() ||
+            std::find(optional_lines.begin(), optional_lines.end(), l) != optional_lines.end();
+        if (!playable_line) {
+            return false;
+        }
+        const auto [present_t, present_player] = state_ref().get_present();
+        (void)present_t;
+        const auto [end_t, end_player] = state_ref().get_timeline_end(l);
+        return end_t == t && end_player == present_player;
+    }
+
+    [[nodiscard]] bool moves_to_inactive_board(const Semimove& sm) const {
+        return !is_playable_board_coord(sm.to.t(), sm.to.l());
+    }
+
+    [[nodiscard]] static bool destination_hits_other_source(const Semimove& lhs, const Semimove& rhs) {
+        return std::make_pair(lhs.to.t(), lhs.to.l()) == std::make_pair(rhs.from.t(), rhs.from.l()) ||
+               std::make_pair(rhs.to.t(), rhs.to.l()) == std::make_pair(lhs.from.t(), lhs.from.l());
+    }
+
+    [[nodiscard]] bool semimoves_are_commutable(const Semimove& lhs, const Semimove& rhs) const {
+        if (destination_hits_other_source(lhs, rhs)) {
+            return false;
+        }
+        return !(moves_to_inactive_board(lhs) && moves_to_inactive_board(rhs));
+    }
+
     std::string variant_pgn_;
     int board_limit_ = 25;
     int board_side_ = 4;
@@ -1142,11 +1158,12 @@ private:
 
         const auto [legal_semimoves, can_submit] = env.get_legal_frontier();
         if (legal_semimoves.empty() && !can_submit) {
-            node.expand({}, true, 0.0f);
+            const float terminal_value = no_legal_action_terminal_value();
+            node.expand({}, true, terminal_value);
             if (action_entries_out != nullptr) {
                 action_entries_out->clear();
             }
-            return 0.0f;
+            return terminal_value;
         }
 
         const EncodedState encoded = env.encode_state();
@@ -1359,7 +1376,7 @@ private:
         }
 
         if (terminated_by_no_action && result.terminal_reason.empty()) {
-            result.outcome = 0.0f;
+            result.outcome = env.current_player() == 0 ? -1.0f : 1.0f;
             result.terminal_reason = "no_legal_action";
         } else if (!env.done() && use_max_game_length && result.terminal_reason.empty()) {
             result.outcome = 0.0f;

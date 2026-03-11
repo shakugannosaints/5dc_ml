@@ -67,21 +67,6 @@ class Semimove:
         """Key for lexicographic ordering (line_idx, from_xy, to_xy)."""
         return (self.line_idx, self.from_pos, self.to_pos)
 
-    def is_commutable_with(self, other: 'Semimove') -> bool:
-        """
-        Two semimoves are commutable if they are on different timelines
-        AND neither is a departing move whose arrival is on the other's timeline.
-        """
-        if self.line_idx == other.line_idx:
-            return False
-        self_local = (self.from_pos[3] == self.to_pos[3])
-        other_local = (other.from_pos[3] == other.to_pos[3])
-        if self_local and other_local:
-            return True
-        if self.to_pos[3] == other.line_idx or other.to_pos[3] == self.line_idx:
-            return False
-        return True
-
     def to_ext_move(self) -> 'engine.ext_move':
         """Convert back to engine ext_move."""
         return engine.ext_move(
@@ -323,12 +308,6 @@ class SemimoveEnv:
 
         filtered_semimoves = self._apply_lexicographic_filter(semimoves)
         mandatory, _, _ = self.state.get_timeline_status()
-        # Lexicographic pruning is only a duplicate-reduction heuristic in
-        # capture-king mode. If it removes every frontier move while the turn is
-        # still incomplete, fall back to the raw pseudolegal frontier instead of
-        # spuriously reporting "no legal action".
-        if not filtered_semimoves and semimoves and len(mandatory) != 0:
-            filtered_semimoves = semimoves
         self._frontier_semimoves = filtered_semimoves
         self._frontier_keys = {self._semimove_key(sm) for sm in filtered_semimoves}
         self._frontier_can_submit = len(mandatory) == 0
@@ -353,11 +332,31 @@ class SemimoveEnv:
             return semimoves
         filtered = []
         for sm in semimoves:
-            if sm.is_commutable_with(self.last_semimove):
+            if self._semimoves_are_commutable(sm, self.last_semimove):
                 if sm.sort_key < self.last_semimove.sort_key:
                     continue
             filtered.append(sm)
         return filtered
+
+    def _is_playable_board_coord(self, t: int, l: int) -> bool:
+        _, present_player = self.state.get_present()
+        mandatory, optional, _ = self.state.get_timeline_status()
+        if l not in mandatory and l not in optional:
+            return False
+        end_t, end_player = self.state.get_timeline_end(l)
+        return end_t == t and bool(end_player) == bool(present_player)
+
+    def _moves_to_inactive_board(self, sm: Semimove) -> bool:
+        return not self._is_playable_board_coord(sm.to_pos[2], sm.to_pos[3])
+
+    @staticmethod
+    def _destination_hits_other_source(lhs: Semimove, rhs: Semimove) -> bool:
+        return lhs.to_pos[2:] == rhs.from_pos[2:] or rhs.to_pos[2:] == lhs.from_pos[2:]
+
+    def _semimoves_are_commutable(self, lhs: Semimove, rhs: Semimove) -> bool:
+        if self._destination_hits_other_source(lhs, rhs):
+            return False
+        return not (self._moves_to_inactive_board(lhs) and self._moves_to_inactive_board(rhs))
 
     def get_legal_frontier(self) -> tuple[list[Semimove], bool]:
         """

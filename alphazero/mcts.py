@@ -255,6 +255,12 @@ class MCTS:
     def _white_to_current_player_value(outcome_white: float, current_player: int) -> float:
         return float(outcome_white if current_player == 0 else -outcome_white)
 
+    @staticmethod
+    def _no_legal_action_terminal_value() -> float:
+        # Current player to move loses immediately if canonical frontier is empty
+        # and submit is unavailable.
+        return -1.0
+
     def _expand_from_tt(
         self,
         node: MCTSNode,
@@ -311,16 +317,17 @@ class MCTS:
             legal_semimoves, can_submit = env.get_legal_frontier()
 
         if not legal_semimoves and not can_submit:
-            node.expand([], terminal=True, terminal_value=0.0)
+            terminal_value = self._no_legal_action_terminal_value()
+            node.expand([], terminal=True, terminal_value=terminal_value)
             if tt_key is not None:
                 self._transposition_table[tt_key] = TranspositionEntry(
-                    value=0.0,
+                    value=terminal_value,
                     child_specs=[],
                     terminal=True,
-                    terminal_value=0.0,
+                    terminal_value=terminal_value,
                     action_entries=[],
                 )
-            return 0.0, ([] if capture_action_entries else None)
+            return terminal_value, ([] if capture_action_entries else None)
 
         encoded = env.encode_state(urgency=urgency)
         board_keys = encoded["board_keys"]

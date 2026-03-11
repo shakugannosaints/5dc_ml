@@ -326,7 +326,7 @@ class SelfPlayWorker:
             else:
                 record.terminal_reason = env.terminal_reason or "checkmate"
         elif terminated_by_no_action:
-            game_outcome = 0.0
+            game_outcome = -1.0 if env.current_player == 0 else 1.0
             record.terminal_reason = "no_legal_action"
         elif use_max_game_length and env.total_semimoves >= max_game_length:
             game_outcome = 0.0

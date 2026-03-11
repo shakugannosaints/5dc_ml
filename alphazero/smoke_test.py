@@ -404,7 +404,35 @@ def test_mcts_transposition_table():
         assert abs(v1 - v2) < 1e-6, "TT changed value estimate"
         return True
 
-    return check("reuse identical leaf expansion", check_tt_cache)
+    def check_no_legal_action_is_loss():
+        class DummyEnv:
+            done = False
+            outcome = 0.0
+            current_player = 0
+            uses_strict_legal_enumeration = False
+
+            def get_mcts_transposition_key(self):
+                return ("dummy",)
+
+            def get_legal_frontier(self):
+                return [], False
+
+        cfg = NetworkConfig(d_model=64, n_heads=4, n_layers=2, d_ff=128, dropout=0.0)
+        net = AlphaZeroNetwork(cfg).to(device)
+        net.eval()
+        mcts = MCTS(
+            net,
+            MCTSConfig(num_simulations=4, dirichlet_epsilon=0.0, use_transposition_table=False),
+            device,
+        )
+        value, entries = mcts._expand_node(MCTSNode(), DummyEnv(), urgency=0.5, capture_action_entries=True)
+        assert value == -1.0, f"Expected no-legal-action loss value -1.0, got {value}"
+        assert entries == [], "No-legal-action terminal should not expose actions"
+        return value
+
+    ok1 = check("reuse identical leaf expansion", check_tt_cache)
+    ok2 = check("treat no-legal-action as current-player loss", check_no_legal_action_is_loss)
+    return ok1 and ok2
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +446,9 @@ def test_capture_king_rules():
     variant = '[Board "Very Small - Open"]\n[Mode "5D"]\n'
 
     def apply_sequence(env, sequence: list[str]):
+        def normalize(text: str) -> str:
+            return text[:-1] if text.endswith("Q") else text
+
         for text in sequence:
             if text == "SUBMIT":
                 result = env.submit_turn(assume_legal=True)
@@ -425,7 +456,13 @@ def test_capture_king_rules():
                     return result
                 continue
             legal, _ = env.get_legal_frontier()
-            sm = next((sm for sm in legal if sm.to_ext_move().to_string() == text), None)
+            sm = next(
+                (
+                    sm for sm in legal
+                    if normalize(sm.to_ext_move().to_string()) == normalize(text)
+                ),
+                None,
+            )
             assert sm is not None, f"Missing legal move: {text}"
             env.apply_semimove(sm)
             if env.done:
@@ -475,9 +512,62 @@ def test_capture_king_rules():
         assert env.done and env.outcome == -1.0, f"Expected black win, got {env.outcome}"
         return capture.to_ext_move().to_string()
 
+    def check_commutable_order_is_not_forced():
+        from .env import Semimove
+
+        env = SemimoveEnv(variant, board_limit=25, rules_mode="capture_king")
+        env.reset()
+
+        playable_smaller = Semimove(
+            line_idx=0,
+            from_pos=(0, 1, 1, 0),
+            to_pos=(1, 1, 1, 0),
+        )
+        inactive_smaller = Semimove(
+            line_idx=0,
+            from_pos=(0, 1, 1, 0),
+            to_pos=(1, 1, 0, 0),
+        )
+        inactive_larger = Semimove(
+            line_idx=1,
+            from_pos=(1, 1, 1, 1),
+            to_pos=(2, 1, 0, 0),
+        )
+        playable_larger = Semimove(
+            line_idx=1,
+            from_pos=(1, 1, 1, 1),
+            to_pos=(2, 1, 1, 1),
+        )
+        enters_other_source = Semimove(
+            line_idx=1,
+            from_pos=(1, 1, 1, 1),
+            to_pos=(2, 1, 1, 0),
+        )
+
+        assert playable_smaller.sort_key < inactive_larger.sort_key
+        assert inactive_smaller.sort_key < inactive_larger.sort_key
+        assert env._is_playable_board_coord(1, 0)
+        assert not env._is_playable_board_coord(0, 0)
+        assert env._semimoves_are_commutable(playable_smaller, inactive_larger)
+        assert not env._semimoves_are_commutable(inactive_smaller, inactive_larger)
+        assert env._semimoves_are_commutable(playable_smaller, playable_larger)
+        assert not env._semimoves_are_commutable(playable_smaller, enters_other_source)
+
+        env.last_semimove = inactive_larger
+        filtered = env._apply_lexicographic_filter([playable_smaller, inactive_smaller, inactive_larger])
+        assert playable_smaller not in filtered, "If not both target inactive boards, the smaller move should be pruned"
+        assert inactive_smaller in filtered, "Two moves to inactive boards should not be treated as commutable"
+        assert inactive_larger in filtered, "Chosen move must stay in the frontier"
+
+        env.last_semimove = enters_other_source
+        filtered_dependency = env._apply_lexicographic_filter([playable_smaller, enters_other_source])
+        assert playable_smaller in filtered_dependency, "Move landing on the other source board must block commutation pruning"
+        return len(filtered), len(filtered_dependency)
+
     check("recognize royal piece enums", check_royal_piece_mapping)
     check("white royal capture ends game", check_white_captures_black_royal)
     check("black royal capture ends game", check_black_captures_white_royal)
+    check("commutable semimove order stays unbiased", check_commutable_order_is_not_forced)
     return True
 
 
