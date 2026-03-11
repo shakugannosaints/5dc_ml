@@ -474,20 +474,31 @@ class CppOnnxSelfPlayWorker:
             )
         self._prepare_runtime_binaries(exe_path)
 
-        model_path = self._export_model()
+        model_path, export_precision = self._export_model()
         workers = max(1, int(getattr(self.sp_cfg, "num_workers", 1)))
         task_games = max(1, int(getattr(self.sp_cfg, "worker_task_games", 1)))
-        ort_threads = max(1, int(getattr(self.sp_cfg, "cpp_onnx_ort_threads", 1)))
         requested_provider = str(getattr(self.sp_cfg, "cpp_onnx_provider", "cpu")).lower()
         cuda_device_id = max(0, int(getattr(self.sp_cfg, "cpp_onnx_cuda_device_id", 0)))
         provider = self._resolve_provider(
             exe_path=exe_path,
             model_path=model_path,
             requested_provider=requested_provider,
-            ort_threads=ort_threads,
+            ort_threads=self._resolve_ort_threads(requested_provider, workers),
             cuda_device_id=cuda_device_id,
         )
+        ort_threads = self._resolve_ort_threads(provider, workers)
+        if provider == "cpu" and export_precision == "fp16":
+            model_path, export_precision = self._export_model(provider_override="cpu")
         log_task_stats = bool(getattr(self.sp_cfg, "log_worker_task_stats", True))
+        logger.info(
+            "cpp_onnx self-play runtime: provider=%s export_precision=%s leaf_batch_size=%s ort_threads=%s workers=%s task_games=%s",
+            provider,
+            export_precision,
+            max(1, int(getattr(self.mcts_cfg, "leaf_batch_size", 1))),
+            ort_threads,
+            workers,
+            task_games,
+        )
 
         tasks: list[tuple[int, int]] = []
         base_seed = random.randint(0, 2**31 - 1)
@@ -574,6 +585,17 @@ class CppOnnxSelfPlayWorker:
                 return games
         return games
 
+    def _resolve_ort_threads(self, provider_name: str, workers: int) -> int:
+        requested = int(getattr(self.sp_cfg, "cpp_onnx_ort_threads", 0))
+        if requested > 0:
+            return requested
+        if provider_name.lower() != "cpu":
+            return 1
+        cpu_count = os.cpu_count() or 1
+        worker_count = max(1, int(workers))
+        per_worker = max(1, cpu_count // worker_count)
+        return min(4, per_worker)
+
     def _resolve_provider(
         self,
         exe_path: Path,
@@ -595,6 +617,7 @@ class CppOnnxSelfPlayWorker:
                     "--variant", str(self.train_cfg.variant_name),
                     "--games", "1",
                     "--sims", str(max(1, min(4, int(self.mcts_cfg.num_simulations)))),
+                    "--leaf-batch-size", str(max(1, int(getattr(self.mcts_cfg, "leaf_batch_size", 1)))),
                     "--min-board-limit", str(self.sp_cfg.min_board_limit),
                     "--max-board-limit", str(self.sp_cfg.min_board_limit),
                     "--material-scale", str(self.sp_cfg.material_scale),
@@ -641,12 +664,25 @@ class CppOnnxSelfPlayWorker:
             )
             return "cpu"
 
-    def _export_model(self) -> Path:
+    def _resolve_export_precision(self, provider_name: str) -> str:
+        precision = str(getattr(self.sp_cfg, "cpp_onnx_model_precision", "auto")).lower()
+        if precision not in {"auto", "fp16", "fp32"}:
+            raise ValueError(f"Unsupported cpp_onnx_model_precision: {precision}")
+        if precision == "auto":
+            return "fp16" if provider_name == "cuda" else "fp32"
+        if precision == "fp16" and provider_name == "cpu":
+            logger.info(
+                "Overriding cpp_onnx_model_precision=fp16 to fp32 for CPU self-play; "
+                "ONNX Runtime CPU inference is typically faster with fp32."
+            )
+            return "fp32"
+        return precision
+
+    def _export_model(self, provider_override: str | None = None) -> tuple[Path, str]:
         from .export_onnx import export_live_network
 
-        precision = str(getattr(self.sp_cfg, "cpp_onnx_model_precision", "fp16")).lower()
-        if precision not in {"fp16", "fp32"}:
-            raise ValueError(f"Unsupported cpp_onnx_model_precision: {precision}")
+        requested_provider = str(provider_override or getattr(self.sp_cfg, "cpp_onnx_provider", "cpu")).lower()
+        export_precision = self._resolve_export_precision(requested_provider)
 
         model_path = Path(getattr(self.sp_cfg, "cpp_onnx_model_path", "alphazero/checkpoints/selfplay_fp16.onnx"))
         if not model_path.is_absolute():
@@ -654,17 +690,18 @@ class CppOnnxSelfPlayWorker:
         metadata_extra = {
             "iteration": getattr(self.train_cfg, "iteration", None),
             "backend": "cpp_onnx",
+            "export_precision": export_precision,
         }
         export_live_network(
             network=self.network,
             cfg=self.train_cfg,
             output_path=str(model_path),
             device_name="cpu",
-            fp16_output=(precision == "fp16"),
+            fp16_output=(export_precision == "fp16"),
             opset=int(getattr(self.sp_cfg, "cpp_onnx_opset", 17)),
             metadata_extra=metadata_extra,
         )
-        return model_path
+        return model_path, export_precision
 
     def _run_task(
         self,
@@ -684,6 +721,7 @@ class CppOnnxSelfPlayWorker:
             "--variant", str(self.train_cfg.variant_name),
             "--games", str(num_games),
             "--sims", str(self.mcts_cfg.num_simulations),
+            "--leaf-batch-size", str(max(1, int(getattr(self.mcts_cfg, "leaf_batch_size", 1)))),
             "--min-board-limit", str(self.sp_cfg.min_board_limit),
             "--max-board-limit", str(self.sp_cfg.max_board_limit),
             "--material-scale", str(self.sp_cfg.material_scale),
@@ -783,6 +821,7 @@ class CppOnnxSelfPlayWorker:
             "--model", str(model_path),
             "--variant", str(self.train_cfg.variant_name),
             "--sims", str(self.mcts_cfg.num_simulations),
+            "--leaf-batch-size", str(max(1, int(getattr(self.mcts_cfg, "leaf_batch_size", 1)))),
             "--min-board-limit", str(self.sp_cfg.min_board_limit),
             "--max-board-limit", str(self.sp_cfg.max_board_limit),
             "--material-scale", str(self.sp_cfg.material_scale),

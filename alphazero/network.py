@@ -247,6 +247,76 @@ class AlphaZeroNetwork(nn.Module):
 
         return logits
 
+    def score_legal_actions_batched_flat(
+        self,
+        board_out: torch.Tensor,
+        submit_logit: torch.Tensor,
+        action_state_indices: torch.Tensor,
+        action_board_indices: torch.Tensor,
+        action_from_squares: torch.Tensor,
+        action_to_squares: torch.Tensor,
+        action_delta_t: torch.Tensor,
+        action_delta_l: torch.Tensor,
+        action_is_submit: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Score explicit legal actions for a batch of states with flattened actions.
+
+        Args:
+            board_out: [B, N, d_model]
+            submit_logit: [B, 1] or [B]
+            action_state_indices: [A] which state each action belongs to
+            action_*: [A] flattened aligned action tensors
+        Returns:
+            logits: [A] flattened legal-action logits
+        """
+        device = board_out.device
+        A = action_board_indices.shape[0]
+        logits = torch.full((A,), -20.0, dtype=board_out.dtype, device=device)
+        if A == 0:
+            return logits
+
+        B = board_out.shape[0]
+        submit_mask = action_is_submit.bool()
+
+        state_idx = action_state_indices.long()
+        zeros = torch.zeros_like(state_idx)
+        state_upper = torch.full_like(state_idx, B - 1)
+        safe_state_idx = torch.minimum(torch.maximum(state_idx, zeros), state_upper)
+
+        submit_values = submit_logit.reshape(-1)[safe_state_idx]
+        logits = torch.where(submit_mask, submit_values, logits)
+
+        idx = action_board_indices.long()
+        valid = (
+            (~submit_mask)
+            & (state_idx >= 0)
+            & (state_idx < B)
+            & (idx >= 0)
+            & (idx < board_out.shape[1])
+        )
+        board_zeros = torch.zeros_like(idx)
+        board_upper = torch.full_like(idx, board_out.shape[1] - 1)
+        safe_idx = torch.minimum(torch.maximum(idx, board_zeros), board_upper)
+        board_ctx = board_out[safe_state_idx, safe_idx]
+
+        from_sq = action_from_squares.long().clamp(0, self.cfg.board_squares - 1)
+        to_sq = action_to_squares.long().clamp(0, self.cfg.board_squares - 1)
+        from_emb = self.from_square_embed(from_sq)
+        to_emb = self.to_square_embed(to_sq)
+
+        dt = action_delta_t.float() / 8.0
+        dl = action_delta_l.float() / 8.0
+        is_jump = ((action_delta_t != 0) | (action_delta_l != 0)).float()
+        is_tl_change = (action_delta_l != 0).float()
+        move_feats = torch.stack([dt, dl, is_jump, is_tl_change], dim=-1)
+        feat_emb = self.move_feat_proj(move_feats)
+
+        move_repr = torch.cat([board_ctx, from_emb, to_emb, feat_emb], dim=-1)
+        move_logits = self.move_scorer(move_repr).squeeze(-1)
+        logits = torch.where(valid, move_logits, logits)
+        return logits
+
     def predict(
         self,
         board_planes: torch.Tensor,

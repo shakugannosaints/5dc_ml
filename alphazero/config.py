@@ -45,6 +45,7 @@ class MCTSConfig:
     dirichlet_epsilon: float = 0.25     # root noise weight
     temperature_start: float = 1.0      # exploration temperature
     temperature_threshold: int = 15     # after this many full moves, use temp=0
+    leaf_batch_size: int = 4            # batched leaf evaluations per search wave
     # Submit prior: base probability assigned to submit action
     submit_prior_weight: float = 0.1
     # Reuse state expansions within one semimove search via a transposition table.
@@ -84,11 +85,11 @@ class SelfPlayConfig:
     # C++ ONNX self-play backend settings.
     cpp_selfplay_executable: str = "build_onnx_selfplay/az_selfplay_onnx.exe"
     cpp_onnx_model_path: str = "alphazero/checkpoints/selfplay_fp16.onnx"
-    cpp_onnx_model_precision: str = "fp16"
+    cpp_onnx_model_precision: str = "auto"
     cpp_onnx_opset: int = 18
     cpp_onnx_provider: str = "cpu"
     cpp_onnx_cuda_device_id: int = 0
-    cpp_onnx_ort_threads: int = 1
+    cpp_onnx_ort_threads: int = 0   # 0 => auto-tune from CPU cores / worker count
     # Legacy compatibility knob. Dynamic-board ONNX export no longer uses it.
     cpp_onnx_max_boards: int = 32
     # Temperature schedule

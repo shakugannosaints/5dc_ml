@@ -30,7 +30,7 @@ from .network import AlphaZeroNetwork
 
 
 class OnnxActionWrapper(nn.Module):
-    """Single-state ONNX wrapper around AlphaZeroNetwork legal-action scoring."""
+    """Batched ONNX wrapper around AlphaZeroNetwork legal-action scoring."""
 
     def __init__(self, network: AlphaZeroNetwork):
         super().__init__()
@@ -42,8 +42,9 @@ class OnnxActionWrapper(nn.Module):
         last_move_markers: torch.Tensor,
         l_coords: torch.Tensor,
         t_coords: torch.Tensor,
-        used_board_count: torch.Tensor,
+        used_board_counts: torch.Tensor,
         urgency: torch.Tensor,
+        action_state_indices: torch.Tensor,
         action_board_indices: torch.Tensor,
         action_from_squares: torch.Tensor,
         action_to_squares: torch.Tensor,
@@ -51,21 +52,24 @@ class OnnxActionWrapper(nn.Module):
         action_delta_l: torch.Tensor,
         action_is_submit: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        board_idx = torch.arange(board_planes.shape[0], device=board_planes.device)
-        padding_mask = board_idx.unsqueeze(0) >= used_board_count.reshape(1, 1)
+        batch_size = board_planes.shape[0]
+        num_boards = board_planes.shape[1]
+        board_idx = torch.arange(num_boards, device=board_planes.device)
+        padding_mask = board_idx.unsqueeze(0) >= used_board_counts.reshape(-1, 1)
 
         value, submit_logit, _, board_out, _ = self.network(
-            board_planes.unsqueeze(0),
-            last_move_markers.unsqueeze(0),
-            l_coords.unsqueeze(0),
-            t_coords.unsqueeze(0),
-            urgency.reshape(1, 1),
+            board_planes,
+            last_move_markers,
+            l_coords,
+            t_coords,
+            urgency.reshape(batch_size, 1),
             padding_mask=padding_mask,
             return_latent=True,
         )
-        logits = self.network.score_legal_actions(
-            board_out=board_out.squeeze(0),
-            submit_logit=submit_logit.squeeze(0),
+        logits = self.network.score_legal_actions_batched_flat(
+            board_out=board_out,
+            submit_logit=submit_logit,
+            action_state_indices=action_state_indices,
             action_board_indices=action_board_indices,
             action_from_squares=action_from_squares,
             action_to_squares=action_to_squares,
@@ -73,7 +77,7 @@ class OnnxActionWrapper(nn.Module):
             action_delta_l=action_delta_l,
             action_is_submit=action_is_submit,
         )
-        return value.reshape(1), logits
+        return value.reshape(batch_size), logits
 
 
 def _resolve_checkpoint_path(cfg: TrainConfig, checkpoint: str) -> Path:
@@ -117,16 +121,18 @@ def _load_network(cfg: TrainConfig, checkpoint_path: Path, device: torch.device)
 
 def _build_dummy_inputs(
     device: torch.device,
+    batch_size: int,
     num_boards: int,
     piece_channels: int,
     board_squares: int,
 ) -> tuple[torch.Tensor, ...]:
-    board_planes = torch.zeros((num_boards, piece_channels, board_squares), dtype=torch.float32, device=device)
-    last_move_markers = torch.zeros((num_boards, board_squares), dtype=torch.float32, device=device)
-    l_coords = torch.zeros((num_boards,), dtype=torch.long, device=device)
-    t_coords = torch.ones((num_boards,), dtype=torch.long, device=device)
-    used_board_count = torch.ones((1,), dtype=torch.long, device=device)
-    urgency = torch.zeros((1,), dtype=torch.float32, device=device)
+    board_planes = torch.zeros((batch_size, num_boards, piece_channels, board_squares), dtype=torch.float32, device=device)
+    last_move_markers = torch.zeros((batch_size, num_boards, board_squares), dtype=torch.float32, device=device)
+    l_coords = torch.zeros((batch_size, num_boards), dtype=torch.long, device=device)
+    t_coords = torch.ones((batch_size, num_boards), dtype=torch.long, device=device)
+    used_board_counts = torch.full((batch_size,), num_boards, dtype=torch.long, device=device)
+    urgency = torch.zeros((batch_size,), dtype=torch.float32, device=device)
+    action_state_indices = torch.zeros((1,), dtype=torch.long, device=device)
     action_board_indices = torch.zeros((1,), dtype=torch.long, device=device)
     action_from_squares = torch.zeros((1,), dtype=torch.long, device=device)
     action_to_squares = torch.zeros((1,), dtype=torch.long, device=device)
@@ -138,8 +144,9 @@ def _build_dummy_inputs(
         last_move_markers,
         l_coords,
         t_coords,
-        used_board_count,
+        used_board_counts,
         urgency,
+        action_state_indices,
         action_board_indices,
         action_from_squares,
         action_to_squares,
@@ -167,8 +174,9 @@ def _export_wrapper_to_onnx(
         "last_move_markers",
         "l_coords",
         "t_coords",
-        "used_board_count",
+        "used_board_counts",
         "urgency",
+        "action_state_indices",
         "action_board_indices",
         "action_from_squares",
         "action_to_squares",
@@ -179,13 +187,15 @@ def _export_wrapper_to_onnx(
     output_names = ["value", "action_logits"]
     num_boards_dim = Dim("num_boards", min=1)
     num_actions_dim = Dim("num_actions", min=1)
+    batch_size = max(1, int(getattr(cfg.mcts, "leaf_batch_size", 1)))
     dynamic_shapes = {
-        "board_planes": {0: num_boards_dim},
-        "last_move_markers": {0: num_boards_dim},
-        "l_coords": {0: num_boards_dim},
-        "t_coords": {0: num_boards_dim},
-        "used_board_count": None,
+        "board_planes": {1: num_boards_dim},
+        "last_move_markers": {1: num_boards_dim},
+        "l_coords": {1: num_boards_dim},
+        "t_coords": {1: num_boards_dim},
+        "used_board_counts": None,
         "urgency": None,
+        "action_state_indices": {0: num_actions_dim},
         "action_board_indices": {0: num_actions_dim},
         "action_from_squares": {0: num_actions_dim},
         "action_to_squares": {0: num_actions_dim},
@@ -196,6 +206,7 @@ def _export_wrapper_to_onnx(
 
     dummy_inputs = _build_dummy_inputs(
         device,
+        batch_size,
         4,
         wrapper.network.cfg.piece_channels,
         wrapper.network.cfg.board_squares,
@@ -255,6 +266,7 @@ def export_live_network(
     metadata_extra: dict | None = None,
 ) -> Path:
     device = torch.device(device_name)
+    batch_slots = max(1, int(getattr(cfg.mcts, "leaf_batch_size", 1)))
     network_copy = AlphaZeroNetwork(cfg.network).to(device)
     state_dict = {
         k: v.detach().to(device=device, dtype=v.dtype).clone()
@@ -278,6 +290,7 @@ def export_live_network(
         "board_squares": cfg.network.board_squares,
         "board_side": cfg.network.board_side,
         "board_axis": "dynamic",
+        "batch_slots": batch_slots,
         "model_precision": "fp16" if fp16_output else "fp32",
         "io_precision": "fp32",
     }

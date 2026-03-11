@@ -537,6 +537,8 @@ def main():
     parser.add_argument('--pgn-snapshot-interval', type=int, default=None,
                         help="Save one PGN snapshot every N completed games; <=0 disables snapshots")
     parser.add_argument('--sims', type=int, default=None, help="MCTS simulations per move")
+    parser.add_argument('--leaf-batch-size', type=int, default=None,
+                        help="Batched leaf evaluations per MCTS search wave")
     parser.add_argument('--min-board-limit', type=int, default=None,
                         help="Minimum board-count limit for self-play termination")
     parser.add_argument('--max-board-limit', type=int, default=None,
@@ -559,14 +561,14 @@ def main():
                         help="Path to the az_selfplay_onnx executable")
     parser.add_argument('--cpp-onnx-model', type=str, default=None,
                         help="Path for the exported self-play ONNX model")
-    parser.add_argument('--cpp-onnx-precision', type=str, choices=["fp16", "fp32"], default=None,
+    parser.add_argument('--cpp-onnx-precision', type=str, choices=["auto", "fp16", "fp32"], default=None,
                         help="Precision used for exported self-play ONNX")
     parser.add_argument('--cpp-onnx-provider', type=str, choices=["cpu", "cuda"], default=None,
                         help="Execution provider used by the C++ ONNX self-play runner")
     parser.add_argument('--cpp-onnx-device-id', type=int, default=None,
                         help="CUDA device id used by the C++ ONNX self-play runner")
     parser.add_argument('--cpp-onnx-ort-threads', type=int, default=None,
-                        help="ORT intra-op threads used inside the C++ self-play runner")
+                        help="ORT intra-op threads used inside the C++ self-play runner; 0 means auto")
     parser.add_argument('--cpp-onnx-max-boards', type=int, default=None,
                         help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -585,6 +587,8 @@ def main():
         cfg.self_play.pgn_snapshot_interval = int(args.pgn_snapshot_interval)
     if args.sims:
         cfg.mcts.num_simulations = args.sims
+    if args.leaf_batch_size:
+        cfg.mcts.leaf_batch_size = max(1, args.leaf_batch_size)
     if args.min_board_limit:
         cfg.self_play.min_board_limit = max(1, args.min_board_limit)
     if args.max_board_limit:
@@ -613,8 +617,8 @@ def main():
         cfg.self_play.cpp_onnx_provider = args.cpp_onnx_provider
     if args.cpp_onnx_device_id is not None:
         cfg.self_play.cpp_onnx_cuda_device_id = max(0, int(args.cpp_onnx_device_id))
-    if args.cpp_onnx_ort_threads:
-        cfg.self_play.cpp_onnx_ort_threads = max(1, args.cpp_onnx_ort_threads)
+    if args.cpp_onnx_ort_threads is not None:
+        cfg.self_play.cpp_onnx_ort_threads = max(0, int(args.cpp_onnx_ort_threads))
     if args.cpp_onnx_max_boards is not None:
         logger.warning("--cpp-onnx-max-boards is deprecated and ignored; ONNX self-play now uses a dynamic board axis.")
 

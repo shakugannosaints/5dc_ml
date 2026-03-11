@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstdint>
@@ -17,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -112,6 +114,7 @@ struct SearchConfig {
     int piece_channels = kDefaultPieceChannels;
     int line_shift = kDefaultLineShift;
     int num_simulations = 200;
+    int leaf_batch_size = 1;
     float c_puct = 2.0f;
     float dirichlet_alpha = 0.3f;
     float dirichlet_epsilon = 0.25f;
@@ -126,11 +129,160 @@ struct SearchConfig {
     std::string provider = "cpu";
     int cuda_device_id = 0;
     int ort_intra_threads = 1;
+    bool use_transposition_table = true;
     uint32_t seed = 1;
     bool serve_mode = false;
     bool print_games = true;
     std::filesystem::path output_data_path;
+    std::filesystem::path profile_json_path;
 };
+
+struct ProfileStat {
+    double total_sec = 0.0;
+    uint64_t calls = 0;
+
+    void add(double elapsed_sec) {
+        total_sec += elapsed_sec;
+        calls += 1;
+    }
+};
+
+struct RunnerProfile {
+    ProfileStat run_batch;
+    ProfileStat play_game;
+    ProfileStat mcts_select_action;
+    ProfileStat mcts_simulation;
+    ProfileStat tree_select;
+    ProfileStat env_clone;
+    ProfileStat replay_apply_semimove;
+    ProfileStat replay_submit_turn;
+    ProfileStat mcts_backprop;
+    ProfileStat expand_node;
+    ProfileStat tt_lookup;
+    ProfileStat legal_frontier;
+    ProfileStat encode_state;
+    ProfileStat build_action_entries;
+    ProfileStat onnx_predict_actions;
+    ProfileStat softmax;
+    ProfileStat sample_policy;
+    ProfileStat selfplay_apply_semimove;
+    ProfileStat selfplay_submit_turn;
+    ProfileStat format_move;
+    ProfileStat show_pgn;
+    ProfileStat binary_write_game;
+
+    uint64_t games = 0;
+    uint64_t semimoves = 0;
+    uint64_t samples = 0;
+    uint64_t simulations = 0;
+    uint64_t network_calls = 0;
+    uint64_t frontier_nodes = 0;
+    uint64_t tt_hits = 0;
+    uint64_t tt_misses = 0;
+};
+
+[[nodiscard]] double seconds_since(std::chrono::steady_clock::time_point start) {
+    using seconds = std::chrono::duration<double>;
+    return std::chrono::duration_cast<seconds>(std::chrono::steady_clock::now() - start).count();
+}
+
+[[nodiscard]] std::string json_escape(const std::string& value) {
+    std::ostringstream oss;
+    for (char ch : value) {
+        switch (ch) {
+            case '\\': oss << "\\\\"; break;
+            case '"': oss << "\\\""; break;
+            case '\n': oss << "\\n"; break;
+            case '\r': oss << "\\r"; break;
+            case '\t': oss << "\\t"; break;
+            default:
+                if (static_cast<unsigned char>(ch) < 0x20U) {
+                    oss << "\\u"
+                        << std::hex << std::setw(4) << std::setfill('0')
+                        << static_cast<int>(static_cast<unsigned char>(ch))
+                        << std::dec << std::setfill(' ');
+                } else {
+                    oss << ch;
+                }
+                break;
+        }
+    }
+    return oss.str();
+}
+
+void write_profile_json(
+    const std::filesystem::path& path,
+    const RunnerProfile& profile,
+    const SearchConfig& cfg
+) {
+    std::ofstream out(path, std::ios::trunc);
+    if (!out) {
+        throw std::runtime_error("Could not open profile JSON output file: " + path.string());
+    }
+
+    const auto write_stat = [&](const char* name, const ProfileStat& stat, bool trailing_comma) {
+        out << "    \"" << name << "\": {\"calls\": " << stat.calls
+            << ", \"total_sec\": " << std::fixed << std::setprecision(6) << stat.total_sec;
+        if (stat.calls > 0) {
+            out << ", \"avg_sec\": " << (stat.total_sec / static_cast<double>(stat.calls));
+        } else {
+            out << ", \"avg_sec\": 0.0";
+        }
+        out << "}";
+        if (trailing_comma) {
+            out << ",";
+        }
+        out << "\n";
+    };
+
+    out << "{\n";
+    out << "  \"config\": {\n";
+    out << "    \"variant\": \"" << json_escape(cfg.variant_name) << "\",\n";
+    out << "    \"games\": " << cfg.num_games << ",\n";
+    out << "    \"sims\": " << cfg.num_simulations << ",\n";
+    out << "    \"leaf_batch_size\": " << cfg.leaf_batch_size << ",\n";
+    out << "    \"provider\": \"" << json_escape(cfg.provider) << "\",\n";
+    out << "    \"ort_threads\": " << cfg.ort_intra_threads << ",\n";
+    out << "    \"min_board_limit\": " << cfg.min_board_limit << ",\n";
+    out << "    \"max_board_limit\": " << cfg.max_board_limit << ",\n";
+    out << "    \"max_game_length\": " << cfg.max_game_length << "\n";
+    out << "  },\n";
+    out << "  \"totals\": {\n";
+    out << "    \"games\": " << profile.games << ",\n";
+    out << "    \"semimoves\": " << profile.semimoves << ",\n";
+    out << "    \"samples\": " << profile.samples << ",\n";
+    out << "    \"simulations\": " << profile.simulations << ",\n";
+    out << "    \"network_calls\": " << profile.network_calls << ",\n";
+    out << "    \"frontier_nodes\": " << profile.frontier_nodes << ",\n";
+    out << "    \"tt_hits\": " << profile.tt_hits << ",\n";
+    out << "    \"tt_misses\": " << profile.tt_misses << "\n";
+    out << "  },\n";
+    out << "  \"timing\": {\n";
+    write_stat("run_batch", profile.run_batch, true);
+    write_stat("play_game", profile.play_game, true);
+    write_stat("mcts_select_action", profile.mcts_select_action, true);
+    write_stat("mcts_simulation", profile.mcts_simulation, true);
+    write_stat("tree_select", profile.tree_select, true);
+    write_stat("env_clone", profile.env_clone, true);
+    write_stat("replay_apply_semimove", profile.replay_apply_semimove, true);
+    write_stat("replay_submit_turn", profile.replay_submit_turn, true);
+    write_stat("mcts_backprop", profile.mcts_backprop, true);
+    write_stat("expand_node", profile.expand_node, true);
+    write_stat("tt_lookup", profile.tt_lookup, true);
+    write_stat("legal_frontier", profile.legal_frontier, true);
+    write_stat("encode_state", profile.encode_state, true);
+    write_stat("build_action_entries", profile.build_action_entries, true);
+    write_stat("onnx_predict_actions", profile.onnx_predict_actions, true);
+    write_stat("softmax", profile.softmax, true);
+    write_stat("sample_policy", profile.sample_policy, true);
+    write_stat("selfplay_apply_semimove", profile.selfplay_apply_semimove, true);
+    write_stat("selfplay_submit_turn", profile.selfplay_submit_turn, true);
+    write_stat("format_move", profile.format_move, true);
+    write_stat("show_pgn", profile.show_pgn, true);
+    write_stat("binary_write_game", profile.binary_write_game, false);
+    out << "  }\n";
+    out << "}\n";
+}
 
 struct MoveLogEntry {
     int player = 0;
@@ -651,6 +803,26 @@ public:
         return state_ref().pretty_move<state::SHOW_CAPTURE | state::SHOW_PROMOTION>(full_move(sm.from, sm.to));
     }
 
+    [[nodiscard]] std::string transposition_key() const {
+        std::ostringstream oss;
+        oss << state_ref().show_fen()
+            << "|p=" << current_player()
+            << "|done=" << (done_ ? 1 : 0);
+        if (done_) {
+            oss << "|out=" << outcome_;
+        }
+        if (last_semimove_.has_value()) {
+            const Semimove& sm = *last_semimove_;
+            oss << "|last="
+                << sm.line_idx << ':'
+                << sm.from.x() << ',' << sm.from.y() << ',' << sm.from.t() << ',' << sm.from.l() << ':'
+                << sm.to.x() << ',' << sm.to.y() << ',' << sm.to.t() << ',' << sm.to.l();
+        } else {
+            oss << "|last=-";
+        }
+        return oss.str();
+    }
+
     [[nodiscard]] std::string show_pgn(uint16_t show_flags = state::SHOW_CAPTURE | state::SHOW_PROMOTION) {
         return game_.show_pgn(show_flags);
     }
@@ -803,19 +975,29 @@ private:
 
 class OnnxPolicyValue {
 public:
+    struct BatchRequest {
+        EncodedState encoded;
+        std::vector<ActionEntry> actions;
+        float urgency = 0.0f;
+    };
+
     OnnxPolicyValue(
         const std::filesystem::path& model_path,
         const std::string& provider,
         int cuda_device_id,
         int intra_threads,
         int piece_channels,
-        int board_squares
+        int board_squares,
+        int batch_slots,
+        RunnerProfile* profile = nullptr
     )
         : env_(ORT_LOGGING_LEVEL_ERROR, "az_selfplay_onnx"),
           memory_info_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeCPUInput)),
           provider_(provider),
           piece_channels_(piece_channels),
-          board_squares_(board_squares) {
+          board_squares_(board_squares),
+          batch_slots_(std::max(1, batch_slots)),
+          profile_(profile) {
         diag_log("OnnxPolicyValue ctor begin provider=" + provider_ + " model=" + model_path.string());
         session_options_.SetIntraOpNumThreads(intra_threads);
         session_options_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
@@ -838,57 +1020,138 @@ public:
         const std::vector<ActionEntry>& actions,
         float urgency
     ) const {
-        if (actions.empty()) {
-            return {0.0f, {}};
+        BatchRequest request{encoded, actions, urgency};
+        auto outputs = predict_actions_batch({request});
+        return outputs.empty() ? std::pair<float, std::vector<float>>{0.0f, {}} : std::move(outputs.front());
+    }
+
+    [[nodiscard]] std::vector<std::pair<float, std::vector<float>>> predict_actions_batch(
+        const std::vector<BatchRequest>& requests
+    ) const {
+        const auto t0 = std::chrono::steady_clock::now();
+        if (requests.empty()) {
+            if (profile_ != nullptr) {
+                profile_->onnx_predict_actions.add(seconds_since(t0));
+                profile_->network_calls += 1;
+            }
+            return {};
         }
-        diag_log(
-            "predict_actions begin boards=" + std::to_string(encoded.num_boards) +
-            " actions=" + std::to_string(actions.size()) +
-            " provider=" + provider_
-        );
+        size_t max_boards = 0;
+        size_t total_actions = 0;
+        for (const auto& request : requests) {
+            max_boards = std::max(max_boards, static_cast<size_t>(request.encoded.num_boards));
+            total_actions += request.actions.size();
+        }
+        if (max_boards == 0) {
+            max_boards = 1;
+        }
+        if (requests.size() > static_cast<size_t>(batch_slots_)) {
+            throw std::runtime_error("predict_actions_batch received more requests than ONNX batch slots.");
+        }
 
-        const std::array<int64_t, 3> board_planes_shape = {
-            static_cast<int64_t>(encoded.num_boards), static_cast<int64_t>(piece_channels_), static_cast<int64_t>(board_squares_)
-        };
-        const std::array<int64_t, 2> marker_shape = {
-            static_cast<int64_t>(encoded.num_boards), static_cast<int64_t>(board_squares_)
-        };
-        const std::array<int64_t, 1> board_dim = {static_cast<int64_t>(encoded.num_boards)};
-        const std::array<int64_t, 1> used_board_count_shape = {1};
-        const std::array<int64_t, 1> urgency_shape = {1};
-        const std::array<int64_t, 1> action_dim = {static_cast<int64_t>(actions.size())};
-
+        const size_t batch_size = static_cast<size_t>(batch_slots_);
+        const size_t active_batch = requests.size();
+        std::vector<float> board_planes(batch_size * max_boards * static_cast<size_t>(piece_channels_) * static_cast<size_t>(board_squares_), 0.0f);
+        std::vector<float> last_move_markers(batch_size * max_boards * static_cast<size_t>(board_squares_), 0.0f);
+        std::vector<int64_t> l_coords(batch_size * max_boards, 0);
+        std::vector<int64_t> t_coords(batch_size * max_boards, 0);
+        std::vector<int64_t> used_board_counts(batch_size, 0);
+        std::vector<float> urgency_values(batch_size, 0.0f);
+        std::vector<int64_t> action_state_indices;
         std::vector<int64_t> action_board_indices;
         std::vector<int64_t> action_from_squares;
         std::vector<int64_t> action_to_squares;
         std::vector<float> action_delta_t;
         std::vector<float> action_delta_l;
         std::vector<int64_t> action_is_submit;
-        action_board_indices.reserve(actions.size());
-        action_from_squares.reserve(actions.size());
-        action_to_squares.reserve(actions.size());
-        action_delta_t.reserve(actions.size());
-        action_delta_l.reserve(actions.size());
-        action_is_submit.reserve(actions.size());
-        for (const auto& action : actions) {
-            action_board_indices.push_back(action.board_idx);
-            action_from_squares.push_back(action.from_sq);
-            action_to_squares.push_back(action.to_sq);
-            action_delta_t.push_back(action.delta_t);
-            action_delta_l.push_back(action.delta_l);
-            action_is_submit.push_back(action.is_submit);
+        std::vector<size_t> action_counts;
+        action_state_indices.reserve(total_actions);
+        action_board_indices.reserve(total_actions);
+        action_from_squares.reserve(total_actions);
+        action_to_squares.reserve(total_actions);
+        action_delta_t.reserve(total_actions);
+        action_delta_l.reserve(total_actions);
+        action_is_submit.reserve(total_actions);
+        action_counts.reserve(active_batch);
+
+        const size_t board_plane_stride = max_boards * static_cast<size_t>(piece_channels_) * static_cast<size_t>(board_squares_);
+        const size_t marker_stride = max_boards * static_cast<size_t>(board_squares_);
+        const size_t coord_stride = max_boards;
+        for (size_t batch_idx = 0; batch_idx < active_batch; ++batch_idx) {
+            const auto& request = requests[batch_idx];
+            const EncodedState& encoded = request.encoded;
+            const size_t num_boards = static_cast<size_t>(encoded.num_boards);
+            used_board_counts[batch_idx] = static_cast<int64_t>(encoded.num_boards);
+            urgency_values[batch_idx] = request.urgency;
+            if (num_boards > 0) {
+                std::copy(
+                    encoded.board_planes.begin(),
+                    encoded.board_planes.end(),
+                    board_planes.begin() + static_cast<std::ptrdiff_t>(batch_idx * board_plane_stride)
+                );
+                std::copy(
+                    encoded.last_move_markers.begin(),
+                    encoded.last_move_markers.end(),
+                    last_move_markers.begin() + static_cast<std::ptrdiff_t>(batch_idx * marker_stride)
+                );
+                std::copy(
+                    encoded.l_coords.begin(),
+                    encoded.l_coords.end(),
+                    l_coords.begin() + static_cast<std::ptrdiff_t>(batch_idx * coord_stride)
+                );
+                std::copy(
+                    encoded.t_coords.begin(),
+                    encoded.t_coords.end(),
+                    t_coords.begin() + static_cast<std::ptrdiff_t>(batch_idx * coord_stride)
+                );
+            }
+            action_counts.push_back(request.actions.size());
+            for (const auto& action : request.actions) {
+                action_state_indices.push_back(static_cast<int64_t>(batch_idx));
+                action_board_indices.push_back(action.board_idx);
+                action_from_squares.push_back(action.from_sq);
+                action_to_squares.push_back(action.to_sq);
+                action_delta_t.push_back(action.delta_t);
+                action_delta_l.push_back(action.delta_l);
+                action_is_submit.push_back(action.is_submit);
+            }
         }
 
-        std::array<int64_t, 1> used_board_count = {static_cast<int64_t>(encoded.num_boards)};
-        std::array<float, 1> urgency_value = {urgency};
+        diag_log(
+            "predict_actions_batch begin batch=" + std::to_string(active_batch) +
+            "/" + std::to_string(batch_slots_) +
+            " max_boards=" + std::to_string(max_boards) +
+            " actions=" + std::to_string(total_actions) +
+            " provider=" + provider_
+        );
 
-        std::array<Ort::Value, 12> input_tensors = {
-            Ort::Value::CreateTensor<float>(memory_info_, const_cast<float*>(encoded.board_planes.data()), encoded.board_planes.size(), board_planes_shape.data(), board_planes_shape.size()),
-            Ort::Value::CreateTensor<float>(memory_info_, const_cast<float*>(encoded.last_move_markers.data()), encoded.last_move_markers.size(), marker_shape.data(), marker_shape.size()),
-            Ort::Value::CreateTensor<int64_t>(memory_info_, const_cast<int64_t*>(encoded.l_coords.data()), encoded.l_coords.size(), board_dim.data(), board_dim.size()),
-            Ort::Value::CreateTensor<int64_t>(memory_info_, const_cast<int64_t*>(encoded.t_coords.data()), encoded.t_coords.size(), board_dim.data(), board_dim.size()),
-            Ort::Value::CreateTensor<int64_t>(memory_info_, used_board_count.data(), used_board_count.size(), used_board_count_shape.data(), used_board_count_shape.size()),
-            Ort::Value::CreateTensor<float>(memory_info_, urgency_value.data(), urgency_value.size(), urgency_shape.data(), urgency_shape.size()),
+        const std::array<int64_t, 4> board_planes_shape = {
+            static_cast<int64_t>(batch_size),
+            static_cast<int64_t>(max_boards),
+            static_cast<int64_t>(piece_channels_),
+            static_cast<int64_t>(board_squares_)
+        };
+        const std::array<int64_t, 3> marker_shape = {
+            static_cast<int64_t>(batch_size),
+            static_cast<int64_t>(max_boards),
+            static_cast<int64_t>(board_squares_)
+        };
+        const std::array<int64_t, 2> board_dim = {
+            static_cast<int64_t>(batch_size),
+            static_cast<int64_t>(max_boards)
+        };
+        const std::array<int64_t, 1> used_board_counts_shape = {static_cast<int64_t>(batch_size)};
+        const std::array<int64_t, 1> urgency_shape = {static_cast<int64_t>(batch_size)};
+        const std::array<int64_t, 1> action_dim = {static_cast<int64_t>(action_state_indices.size())};
+
+        std::array<Ort::Value, 13> input_tensors = {
+            Ort::Value::CreateTensor<float>(memory_info_, board_planes.data(), board_planes.size(), board_planes_shape.data(), board_planes_shape.size()),
+            Ort::Value::CreateTensor<float>(memory_info_, last_move_markers.data(), last_move_markers.size(), marker_shape.data(), marker_shape.size()),
+            Ort::Value::CreateTensor<int64_t>(memory_info_, l_coords.data(), l_coords.size(), board_dim.data(), board_dim.size()),
+            Ort::Value::CreateTensor<int64_t>(memory_info_, t_coords.data(), t_coords.size(), board_dim.data(), board_dim.size()),
+            Ort::Value::CreateTensor<int64_t>(memory_info_, used_board_counts.data(), used_board_counts.size(), used_board_counts_shape.data(), used_board_counts_shape.size()),
+            Ort::Value::CreateTensor<float>(memory_info_, urgency_values.data(), urgency_values.size(), urgency_shape.data(), urgency_shape.size()),
+            Ort::Value::CreateTensor<int64_t>(memory_info_, action_state_indices.data(), action_state_indices.size(), action_dim.data(), action_dim.size()),
             Ort::Value::CreateTensor<int64_t>(memory_info_, action_board_indices.data(), action_board_indices.size(), action_dim.data(), action_dim.size()),
             Ort::Value::CreateTensor<int64_t>(memory_info_, action_from_squares.data(), action_from_squares.size(), action_dim.data(), action_dim.size()),
             Ort::Value::CreateTensor<int64_t>(memory_info_, action_to_squares.data(), action_to_squares.size(), action_dim.data(), action_dim.size()),
@@ -908,7 +1171,7 @@ public:
         );
         diag_log("session.Run end");
 
-        float value = outputs[0].GetTensorMutableData<float>()[0];
+        const float* values_ptr = outputs[0].GetTensorData<float>();
         diag_log("read value output");
         auto type_info = outputs[1].GetTensorTypeAndShapeInfo();
         std::vector<int64_t> output_shape = type_info.GetShape();
@@ -917,9 +1180,23 @@ public:
             output_len *= static_cast<size_t>(dim);
         }
         const float* logits_ptr = outputs[1].GetTensorData<float>();
-        std::vector<float> logits(logits_ptr, logits_ptr + output_len);
-        diag_log("predict_actions end logits=" + std::to_string(logits.size()));
-        return {value, logits};
+        std::vector<std::pair<float, std::vector<float>>> result;
+        result.reserve(active_batch);
+        size_t offset = 0;
+        for (size_t batch_idx = 0; batch_idx < active_batch; ++batch_idx) {
+            const size_t count = action_counts[batch_idx];
+            result.emplace_back(
+                values_ptr[batch_idx],
+                std::vector<float>(logits_ptr + offset, logits_ptr + offset + count)
+            );
+            offset += count;
+        }
+        diag_log("predict_actions_batch end logits=" + std::to_string(output_len));
+        if (profile_ != nullptr) {
+            profile_->onnx_predict_actions.add(seconds_since(t0));
+            profile_->network_calls += static_cast<uint64_t>(active_batch);
+        }
+        return result;
     }
 
 private:
@@ -930,13 +1207,16 @@ private:
     std::string provider_ = "cpu";
     int piece_channels_ = kDefaultPieceChannels;
     int board_squares_ = 16;
-    const std::array<const char*, 12> input_names_ = {
+    int batch_slots_ = 1;
+    RunnerProfile* profile_ = nullptr;
+    const std::array<const char*, 13> input_names_ = {
         "board_planes",
         "last_move_markers",
         "l_coords",
         "t_coords",
-        "used_board_count",
+        "used_board_counts",
         "urgency",
+        "action_state_indices",
         "action_board_indices",
         "action_from_squares",
         "action_to_squares",
@@ -1007,8 +1287,16 @@ public:
 
 class SemimoveMcts {
 public:
-    SemimoveMcts(const SearchConfig& cfg, OnnxPolicyValue& network, std::mt19937& rng)
-        : cfg_(cfg), network_(network), rng_(rng) {}
+    struct TranspositionEntry {
+        float value = 0.0f;
+        bool terminal = false;
+        float terminal_value = 0.0f;
+        std::vector<std::pair<ActionChoice, float>> child_specs;
+        std::vector<ActionEntry> action_entries;
+    };
+
+    SemimoveMcts(const SearchConfig& cfg, OnnxPolicyValue& network, std::mt19937& rng, RunnerProfile* profile = nullptr)
+        : cfg_(cfg), network_(network), rng_(rng), profile_(profile) {}
 
     struct SearchResult {
         ActionChoice action;
@@ -1017,7 +1305,24 @@ public:
         std::vector<ActionEntry> action_entries;
     };
 
+    struct PendingLeaf {
+        MCTSNode* node = nullptr;
+        CaptureKingEnv env;
+        std::vector<MCTSNode*> path;
+        std::chrono::steady_clock::time_point sim_start{};
+
+        PendingLeaf(
+            MCTSNode* node_in,
+            CaptureKingEnv env_in,
+            std::vector<MCTSNode*> path_in,
+            std::chrono::steady_clock::time_point sim_start_in
+        )
+            : node(node_in), env(std::move(env_in)), path(std::move(path_in)), sim_start(sim_start_in) {}
+    };
+
     [[nodiscard]] SearchResult select_action(CaptureKingEnv& env, float urgency, float temperature) {
+        const auto select_start = std::chrono::steady_clock::now();
+        transposition_table_.clear();
         MCTSNode root;
         std::vector<ActionEntry> root_entries;
         (void)expand_node(root, env, urgency, &root_entries);
@@ -1035,48 +1340,86 @@ public:
             }
         }
 
-        for (int sim = 0; sim < cfg_.num_simulations; ++sim) {
-            CaptureKingEnv scratch = env.clone();
-            std::vector<MCTSNode*> path;
-            MCTSNode* node = &root;
-            path.push_back(node);
+        int sim = 0;
+        while (sim < cfg_.num_simulations) {
+            std::vector<PendingLeaf> pending;
+            pending.reserve(static_cast<size_t>(std::max(1, cfg_.leaf_batch_size)));
 
-            while (node->is_expanded && !node->is_terminal && !node->children.empty()) {
-                node = node->select_child(cfg_.c_puct);
+            while (sim < cfg_.num_simulations && static_cast<int>(pending.size()) < std::max(1, cfg_.leaf_batch_size)) {
+                const auto sim_start = std::chrono::steady_clock::now();
+                CaptureKingEnv scratch = env.clone();
+                if (profile_ != nullptr) {
+                    profile_->env_clone.add(seconds_since(sim_start));
+                    profile_->simulations += 1;
+                }
+                std::vector<MCTSNode*> path;
+                MCTSNode* node = &root;
                 path.push_back(node);
 
-                if (node->action.is_submit) {
-                    const auto outcome = scratch.submit_turn(true);
-                    if (outcome.has_value()) {
-                        node->is_terminal = true;
-                        node->terminal_value = white_to_current_player_value(*outcome, scratch.current_player());
+                const auto tree_select_start = std::chrono::steady_clock::now();
+                while (node->is_expanded && !node->is_terminal && !node->children.empty()) {
+                    node = node->select_child(cfg_.c_puct);
+                    path.push_back(node);
+
+                    if (node->action.is_submit) {
+                        const auto submit_start = std::chrono::steady_clock::now();
+                        const auto outcome = scratch.submit_turn(true);
+                        if (profile_ != nullptr) {
+                            profile_->replay_submit_turn.add(seconds_since(submit_start));
+                        }
+                        if (outcome.has_value()) {
+                            node->is_terminal = true;
+                            node->terminal_value = white_to_current_player_value(*outcome, scratch.current_player());
+                            break;
+                        }
+                    } else {
+                        const auto apply_start = std::chrono::steady_clock::now();
+                        if (!scratch.apply_semimove(node->action.semimove, false)) {
+                            throw std::runtime_error("Expanded semimove failed during MCTS replay.");
+                        }
+                        if (profile_ != nullptr) {
+                            profile_->replay_apply_semimove.add(seconds_since(apply_start));
+                        }
+                    }
+                }
+                if (profile_ != nullptr) {
+                    profile_->tree_select.add(seconds_since(tree_select_start));
+                }
+
+                if (node->is_terminal) {
+                    backpropagate(path, node->terminal_value);
+                    if (profile_ != nullptr) {
+                        profile_->mcts_simulation.add(seconds_since(sim_start));
+                    }
+                    sim += 1;
+                    continue;
+                }
+
+                bool duplicate_pending = false;
+                for (const auto& leaf : pending) {
+                    if (leaf.node == node) {
+                        duplicate_pending = true;
                         break;
                     }
-                } else {
-                    if (!scratch.apply_semimove(node->action.semimove, false)) {
-                        throw std::runtime_error("Expanded semimove failed during MCTS replay.");
-                    }
                 }
+                if (duplicate_pending) {
+                    break;
+                }
+
+                apply_virtual_visit(path);
+                pending.emplace_back(node, std::move(scratch), std::move(path), sim_start);
+                sim += 1;
             }
 
-            float value = 0.0f;
-            if (node->is_terminal) {
-                value = node->terminal_value;
-            } else if (!node->is_expanded) {
-                value = expand_node(*node, scratch, urgency, nullptr);
-            }
-
-            for (auto it = path.rbegin(); it != path.rend(); ++it) {
-                MCTSNode* path_node = *it;
-                path_node->visit_count += 1;
-                path_node->value_sum += value;
-                if (path_node->action.is_submit) {
-                    value = -value;
-                }
+            if (!pending.empty()) {
+                expand_pending_leaves_batched(pending, urgency);
             }
         }
 
         if (root.children.empty()) {
+            if (profile_ != nullptr) {
+                profile_->mcts_select_action.add(seconds_since(select_start));
+            }
             return {ActionChoice{}, root.q_value(), {}};
         }
 
@@ -1085,11 +1428,180 @@ public:
             visits[i] = static_cast<float>(root.children[i]->visit_count);
         }
         std::vector<float> policy = visit_policy(visits, temperature);
+        const auto sample_start = std::chrono::steady_clock::now();
         const size_t idx = sample_policy(policy);
+        if (profile_ != nullptr) {
+            profile_->sample_policy.add(seconds_since(sample_start));
+            profile_->mcts_select_action.add(seconds_since(select_start));
+        }
         return {root.children[idx]->action, root.q_value(), policy, std::move(root_entries)};
     }
 
 private:
+    void apply_virtual_visit(const std::vector<MCTSNode*>& path) {
+        for (MCTSNode* path_node : path) {
+            path_node->visit_count += 1;
+        }
+    }
+
+    void accumulate_value_only(const std::vector<MCTSNode*>& path, float value) {
+        const auto backprop_start = std::chrono::steady_clock::now();
+        float running = value;
+        for (auto it = path.rbegin(); it != path.rend(); ++it) {
+            MCTSNode* path_node = *it;
+            path_node->value_sum += running;
+            if (path_node->action.is_submit) {
+                running = -running;
+            }
+        }
+        if (profile_ != nullptr) {
+            profile_->mcts_backprop.add(seconds_since(backprop_start));
+        }
+    }
+
+    void backpropagate(const std::vector<MCTSNode*>& path, float value) {
+        apply_virtual_visit(path);
+        accumulate_value_only(path, value);
+    }
+
+    void expand_pending_leaves_batched(std::vector<PendingLeaf>& pending, float urgency) {
+        const auto batch_expand_start = std::chrono::steady_clock::now();
+        std::vector<OnnxPolicyValue::BatchRequest> batch_requests;
+        batch_requests.reserve(pending.size());
+        std::vector<size_t> request_leaf_indices;
+        request_leaf_indices.reserve(pending.size());
+        std::vector<float> resolved_values(pending.size(), 0.0f);
+
+        for (size_t i = 0; i < pending.size(); ++i) {
+            auto& leaf = pending[i];
+            MCTSNode& node = *leaf.node;
+
+            std::string tt_key;
+            if (cfg_.use_transposition_table) {
+                const auto tt_lookup_start = std::chrono::steady_clock::now();
+                tt_key = leaf.env.transposition_key();
+                auto found = transposition_table_.find(tt_key);
+                if (profile_ != nullptr) {
+                    profile_->tt_lookup.add(seconds_since(tt_lookup_start));
+                }
+                if (found != transposition_table_.end()) {
+                    node.expand(
+                        found->second.child_specs,
+                        found->second.terminal,
+                        found->second.terminal_value
+                    );
+                    resolved_values[i] = found->second.value;
+                    if (profile_ != nullptr) {
+                        profile_->tt_hits += 1;
+                    }
+                    continue;
+                }
+                if (profile_ != nullptr) {
+                    profile_->tt_misses += 1;
+                }
+            }
+
+            if (leaf.env.done()) {
+                const float terminal_value = white_to_current_player_value(leaf.env.outcome(), leaf.env.current_player());
+                node.expand({}, true, terminal_value);
+                resolved_values[i] = terminal_value;
+                if (cfg_.use_transposition_table) {
+                    transposition_table_[tt_key] = TranspositionEntry{
+                        terminal_value,
+                        true,
+                        terminal_value,
+                        {},
+                        {}
+                    };
+                }
+                continue;
+            }
+
+            const auto frontier_start = std::chrono::steady_clock::now();
+            const auto [legal_semimoves, can_submit] = leaf.env.get_legal_frontier();
+            if (profile_ != nullptr) {
+                profile_->legal_frontier.add(seconds_since(frontier_start));
+                profile_->frontier_nodes += 1;
+            }
+            if (legal_semimoves.empty() && !can_submit) {
+                const float terminal_value = no_legal_action_terminal_value();
+                node.expand({}, true, terminal_value);
+                resolved_values[i] = terminal_value;
+                if (cfg_.use_transposition_table) {
+                    transposition_table_[tt_key] = TranspositionEntry{
+                        terminal_value,
+                        true,
+                        terminal_value,
+                        {},
+                        {}
+                    };
+                }
+                continue;
+            }
+
+            const auto encode_start = std::chrono::steady_clock::now();
+            EncodedState encoded = leaf.env.encode_state();
+            if (profile_ != nullptr) {
+                profile_->encode_state.add(seconds_since(encode_start));
+            }
+            const auto build_start = std::chrono::steady_clock::now();
+            std::vector<ActionEntry> entries = build_action_entries(leaf.env, encoded, legal_semimoves, can_submit);
+            if (profile_ != nullptr) {
+                profile_->build_action_entries.add(seconds_since(build_start));
+            }
+            batch_requests.push_back(OnnxPolicyValue::BatchRequest{
+                std::move(encoded),
+                std::move(entries),
+                urgency,
+            });
+            request_leaf_indices.push_back(i);
+        }
+
+        if (!batch_requests.empty()) {
+            const auto batch_outputs = network_.predict_actions_batch(batch_requests);
+            for (size_t req_idx = 0; req_idx < batch_requests.size(); ++req_idx) {
+                const size_t leaf_idx = request_leaf_indices[req_idx];
+                auto& leaf = pending[leaf_idx];
+                auto& node = *leaf.node;
+                const auto& [value, logits] = batch_outputs[req_idx];
+                auto& request = batch_requests[req_idx];
+                const auto softmax_start = std::chrono::steady_clock::now();
+                const std::vector<float> priors = softmax(logits);
+                if (profile_ != nullptr) {
+                    profile_->softmax.add(seconds_since(softmax_start));
+                }
+
+                std::vector<std::pair<ActionChoice, float>> child_specs;
+                child_specs.reserve(request.actions.size());
+                for (size_t j = 0; j < request.actions.size(); ++j) {
+                    child_specs.emplace_back(request.actions[j].action, priors[j]);
+                }
+                node.expand(child_specs, false, 0.0f);
+                resolved_values[leaf_idx] = value;
+
+                if (cfg_.use_transposition_table) {
+                    transposition_table_[leaf.env.transposition_key()] = TranspositionEntry{
+                        value,
+                        false,
+                        0.0f,
+                        child_specs,
+                        request.actions
+                    };
+                }
+            }
+        }
+
+        for (size_t i = 0; i < pending.size(); ++i) {
+            accumulate_value_only(pending[i].path, resolved_values[i]);
+            if (profile_ != nullptr) {
+                profile_->mcts_simulation.add(seconds_since(pending[i].sim_start));
+            }
+        }
+        if (profile_ != nullptr) {
+            profile_->expand_node.add(seconds_since(batch_expand_start));
+        }
+    }
+
     [[nodiscard]] static int find_board_index(
         const std::vector<BoardKey>& board_keys,
         const Semimove& sm,
@@ -1147,29 +1659,98 @@ private:
         float urgency,
         std::vector<ActionEntry>* action_entries_out
     ) {
+        const auto expand_start = std::chrono::steady_clock::now();
+        std::string tt_key;
+        if (cfg_.use_transposition_table) {
+            const auto tt_lookup_start = std::chrono::steady_clock::now();
+            tt_key = env.transposition_key();
+            auto found = transposition_table_.find(tt_key);
+            if (profile_ != nullptr) {
+                profile_->tt_lookup.add(seconds_since(tt_lookup_start));
+            }
+            if (found != transposition_table_.end()) {
+                node.expand(
+                    found->second.child_specs,
+                    found->second.terminal,
+                    found->second.terminal_value
+                );
+                if (action_entries_out != nullptr) {
+                    *action_entries_out = found->second.action_entries;
+                }
+                if (profile_ != nullptr) {
+                    profile_->tt_hits += 1;
+                    profile_->expand_node.add(seconds_since(expand_start));
+                }
+                return found->second.value;
+            }
+            if (profile_ != nullptr) {
+                profile_->tt_misses += 1;
+            }
+        }
         if (env.done()) {
             const float terminal_value = white_to_current_player_value(env.outcome(), env.current_player());
             node.expand({}, true, terminal_value);
             if (action_entries_out != nullptr) {
                 action_entries_out->clear();
             }
+            if (cfg_.use_transposition_table) {
+                transposition_table_[tt_key] = TranspositionEntry{
+                    terminal_value,
+                    true,
+                    terminal_value,
+                    {},
+                    {}
+                };
+            }
+            if (profile_ != nullptr) {
+                profile_->expand_node.add(seconds_since(expand_start));
+            }
             return terminal_value;
         }
 
+        const auto frontier_start = std::chrono::steady_clock::now();
         const auto [legal_semimoves, can_submit] = env.get_legal_frontier();
+        if (profile_ != nullptr) {
+            profile_->legal_frontier.add(seconds_since(frontier_start));
+            profile_->frontier_nodes += 1;
+        }
         if (legal_semimoves.empty() && !can_submit) {
             const float terminal_value = no_legal_action_terminal_value();
             node.expand({}, true, terminal_value);
             if (action_entries_out != nullptr) {
                 action_entries_out->clear();
             }
+            if (cfg_.use_transposition_table) {
+                transposition_table_[tt_key] = TranspositionEntry{
+                    terminal_value,
+                    true,
+                    terminal_value,
+                    {},
+                    {}
+                };
+            }
+            if (profile_ != nullptr) {
+                profile_->expand_node.add(seconds_since(expand_start));
+            }
             return terminal_value;
         }
 
+        const auto encode_start = std::chrono::steady_clock::now();
         const EncodedState encoded = env.encode_state();
+        if (profile_ != nullptr) {
+            profile_->encode_state.add(seconds_since(encode_start));
+        }
+        const auto build_start = std::chrono::steady_clock::now();
         std::vector<ActionEntry> entries = build_action_entries(env, encoded, legal_semimoves, can_submit);
+        if (profile_ != nullptr) {
+            profile_->build_action_entries.add(seconds_since(build_start));
+        }
         const auto [value, logits] = network_.predict_actions(encoded, entries, urgency);
+        const auto softmax_start = std::chrono::steady_clock::now();
         const std::vector<float> priors = softmax(logits);
+        if (profile_ != nullptr) {
+            profile_->softmax.add(seconds_since(softmax_start));
+        }
 
         std::vector<std::pair<ActionChoice, float>> child_specs;
         child_specs.reserve(entries.size());
@@ -1180,6 +1761,20 @@ private:
 
         if (action_entries_out != nullptr) {
             *action_entries_out = std::move(entries);
+        }
+        if (cfg_.use_transposition_table) {
+            const std::vector<ActionEntry>& stored_entries =
+                action_entries_out != nullptr ? *action_entries_out : entries;
+            transposition_table_[tt_key] = TranspositionEntry{
+                value,
+                false,
+                0.0f,
+                child_specs,
+                stored_entries
+            };
+        }
+        if (profile_ != nullptr) {
+            profile_->expand_node.add(seconds_since(expand_start));
         }
         return value;
     }
@@ -1241,6 +1836,8 @@ private:
     const SearchConfig& cfg_;
     OnnxPolicyValue& network_;
     std::mt19937& rng_;
+    RunnerProfile* profile_ = nullptr;
+    std::unordered_map<std::string, TranspositionEntry> transposition_table_{};
 };
 
 class SelfPlayRunner {
@@ -1250,8 +1847,8 @@ public:
     SelfPlayRunner(const SearchConfig& cfg, const std::filesystem::path& model_path)
         : cfg_(cfg),
           rng_(cfg.seed),
-          network_(model_path, cfg.provider, cfg.cuda_device_id, cfg.ort_intra_threads, cfg.piece_channels, cfg.board_squares),
-          mcts_(cfg, network_, rng_) {}
+          network_(model_path, cfg.provider, cfg.cuda_device_id, cfg.ort_intra_threads, cfg.piece_channels, cfg.board_squares, cfg.leaf_batch_size, &profile_),
+          mcts_(cfg, network_, rng_, &profile_) {}
 
     void run() {
         run_batch(cfg_.num_games, cfg_.seed, cfg_.output_data_path, cfg_.print_games);
@@ -1288,6 +1885,7 @@ public:
 
 private:
     void run_batch(int num_games, uint32_t seed, const std::filesystem::path& output_path, bool print_games) {
+        const auto batch_start = std::chrono::steady_clock::now();
         rng_.seed(seed);
         std::uniform_int_distribution<int> board_limit_dist(cfg_.min_board_limit, cfg_.max_board_limit);
         std::optional<BinarySampleWriter> writer;
@@ -1302,12 +1900,19 @@ private:
                 print_game(game_idx, result);
             }
             if (writer.has_value()) {
+                const auto write_start = std::chrono::steady_clock::now();
                 writer->write_game(result);
+                profile_.binary_write_game.add(seconds_since(write_start));
             }
+        }
+        profile_.run_batch.add(seconds_since(batch_start));
+        if (!cfg_.profile_json_path.empty()) {
+            write_profile_json(cfg_.profile_json_path, profile_, cfg_);
         }
     }
 
     [[nodiscard]] GameResult play_game(int board_limit) {
+        const auto game_start = std::chrono::steady_clock::now();
         CaptureKingEnv env(
             cfg_.variant_pgn,
             board_limit,
@@ -1327,7 +1932,9 @@ private:
             const float temperature = env.total_semimoves() < cfg_.temperature_threshold
                 ? cfg_.temperature
                 : cfg_.temperature_final;
+            const auto encode_start = std::chrono::steady_clock::now();
             const EncodedState encoded = env.encode_state();
+            profile_.encode_state.add(seconds_since(encode_start));
             const auto search_result = mcts_.select_action(env, urgency, temperature);
             if (search_result.policy_probs.empty()) {
                 terminated_by_no_action = true;
@@ -1344,7 +1951,9 @@ private:
                 player,
             });
             if (search_result.action.is_submit) {
+                const auto submit_start = std::chrono::steady_clock::now();
                 const auto outcome = env.submit_turn(true);
+                profile_.selfplay_submit_turn.add(seconds_since(submit_start));
                 result.move_history.push_back(MoveLogEntry{
                     player,
                     true,
@@ -1357,10 +1966,14 @@ private:
                     result.terminal_reason = env.terminal_reason();
                 }
             } else {
+                const auto format_start = std::chrono::steady_clock::now();
                 const std::string move_text = env.format_move(search_result.action.semimove);
+                profile_.format_move.add(seconds_since(format_start));
+                const auto apply_start = std::chrono::steady_clock::now();
                 if (!env.apply_semimove(search_result.action.semimove, true)) {
                     throw std::runtime_error("Selected semimove failed in self-play.");
                 }
+                profile_.selfplay_apply_semimove.add(seconds_since(apply_start));
                 result.move_history.push_back(MoveLogEntry{
                     player,
                     false,
@@ -1386,10 +1999,16 @@ private:
             result.terminal_reason = env.terminal_reason();
         }
         result.total_semimoves = env.total_semimoves();
+        const auto pgn_start = std::chrono::steady_clock::now();
         result.pgn = env.show_pgn(state::SHOW_CAPTURE | state::SHOW_PROMOTION);
+        profile_.show_pgn.add(seconds_since(pgn_start));
         for (auto& sample : result.samples) {
             sample.value_target = sample.player == 0 ? result.outcome : -result.outcome;
         }
+        profile_.games += 1;
+        profile_.semimoves += static_cast<uint64_t>(result.total_semimoves);
+        profile_.samples += static_cast<uint64_t>(result.samples.size());
+        profile_.play_game.add(seconds_since(game_start));
         return result;
     }
 
@@ -1419,6 +2038,7 @@ private:
     }
 
     SearchConfig cfg_;
+    RunnerProfile profile_{};
     std::mt19937 rng_;
     OnnxPolicyValue network_;
     SemimoveMcts mcts_;
@@ -1445,6 +2065,8 @@ private:
             cfg.num_games = std::stoi(require_value("--games"));
         } else if (arg == "--sims") {
             cfg.num_simulations = std::stoi(require_value("--sims"));
+        } else if (arg == "--leaf-batch-size") {
+            cfg.leaf_batch_size = std::stoi(require_value("--leaf-batch-size"));
         } else if (arg == "--min-board-limit") {
             cfg.min_board_limit = std::stoi(require_value("--min-board-limit"));
         } else if (arg == "--max-board-limit") {
@@ -1475,6 +2097,8 @@ private:
             (void)require_value("--onnx-max-boards");
         } else if (arg == "--output-data") {
             cfg.output_data_path = require_value("--output-data");
+        } else if (arg == "--profile-json") {
+            cfg.profile_json_path = require_value("--profile-json");
         } else if (arg == "--quiet") {
             cfg.print_games = false;
         } else if (arg == "--seed") {
@@ -1488,6 +2112,7 @@ private:
                 << "  --variant NAME               Variant preset: very_small, standard, or standard_turn_zero\n"
                 << "  --games N                    Number of self-play games (default: 1)\n"
                 << "  --sims N                     MCTS simulations per semimove (default: 200)\n"
+                << "  --leaf-batch-size N          Batched leaf evaluations per search wave (default: 1)\n"
                 << "  --min-board-limit N          Minimum board limit (default: 15)\n"
                 << "  --max-board-limit N          Maximum board limit (default: 25)\n"
                 << "  --material-scale X           Tanh scale for board-limit material scoring (default: 2.0)\n"
@@ -1502,6 +2127,7 @@ private:
                 << "  --cuda-device-id N           CUDA device id when provider=cuda (default: 0)\n"
                 << "  --ort-threads N              ORT intra-op threads (default: 1)\n"
                 << "  --output-data PATH           Write binary training samples to PATH\n"
+                << "  --profile-json PATH          Write detailed C++ timing profile JSON to PATH\n"
                 << "  --serve                      Run as a persistent stdin/stdout worker\n"
                 << "  --quiet                      Suppress human-readable game logs\n"
                 << "  --seed N                     RNG seed (default: 1)\n";
@@ -1516,6 +2142,9 @@ private:
     }
     if (cfg.provider != "cpu" && cfg.provider != "cuda") {
         throw std::runtime_error("provider must be 'cpu' or 'cuda'.");
+    }
+    if (cfg.leaf_batch_size <= 0) {
+        throw std::runtime_error("leaf-batch-size must be >= 1.");
     }
     if (cfg.cuda_device_id < 0) {
         throw std::runtime_error("cuda-device-id must be >= 0.");
