@@ -29,16 +29,56 @@ createModule().then((engine) => {
 
     self.postMessage({ type: 'ready' });
 
+    function normalizeImportedPgn(pgn) {
+        if (!pgn || !pgn.includes('[Board "Very Small - Open"]')) {
+            return pgn;
+        }
+        const lines = pgn.split(/\r?\n/);
+        let maxRank = 0;
+        for (const line of lines) {
+            if (!line || line.startsWith('[')) continue;
+            const matches = line.matchAll(/([a-h])([1-8])/g);
+            for (const match of matches) {
+                maxRank = Math.max(maxRank, Number(match[2]));
+            }
+        }
+        // Older/generated very-small PGNs may use local 4x4 ranks (1-4).
+        // The engine parser currently expects absolute board ranks (5-8).
+        if (maxRank > 4) {
+            return pgn;
+        }
+        return lines.map((line) => {
+            if (!line || line.startsWith('[')) {
+                return line;
+            }
+            return line.replace(/([a-h])([1-4])/g, (_, file, rank) => {
+                return `${file}${Number(rank) + 4}`;
+            });
+        }).join('\n');
+    }
+
     function loadGame(pgn) {
-        let g0 = self.engine.from_pgn(pgn);
+        const allowSubmit = !!self.settings.allowSubmitWithChecks;
+        let g0 = self.engine.from_pgn(pgn, allowSubmit);
+        if (!g0.success) {
+            const normalizedPgn = normalizeImportedPgn(pgn);
+            if (normalizedPgn !== pgn) {
+                const fallback = self.engine.from_pgn(normalizedPgn, allowSubmit);
+                if (fallback.success) {
+                    g0 = fallback;
+                } else {
+                    g0.message = `${g0.message}\n\nFallback import also failed:\n${fallback.message}`;
+                }
+            }
+        }
         if (!g0.success) {
             self.postMessage({ type: 'alert', message: g0.message });
-        } else {
-            if (self.game) {
-                self.game.delete();
-            }
-            self.game = g0.game;
+            return;
         }
+        if (self.game) {
+            self.game.delete();
+        }
+        self.game = g0.game;
     }
 
     function viewGame(afterSubmit) {

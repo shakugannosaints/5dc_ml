@@ -18,6 +18,36 @@ state::state(multiverse &mtv) noexcept : m(mtv.clone())
 state::state(const pgnparser_ast::game &g)
 {
     auto &metadata = g.headers;
+    auto infer_size_from_fen = [](const std::string &fen) -> std::pair<int, int> {
+        int rows = 1;
+        int cols = 0;
+        int current_cols = 0;
+        for(size_t i = 0; i < fen.size(); ++i)
+        {
+            char c = fen[i];
+            if(c == '/')
+            {
+                cols = std::max(cols, current_cols);
+                current_cols = 0;
+                rows += 1;
+                continue;
+            }
+            if(std::isdigit(static_cast<unsigned char>(c)))
+            {
+                current_cols += c - '0';
+                continue;
+            }
+            if(i + 1 < fen.size() && fen[i + 1] == '*')
+            {
+                current_cols += 1;
+                i += 1;
+                continue;
+            }
+            current_cols += 1;
+        }
+        cols = std::max(cols, current_cols);
+        return {rows, cols};
+    };
     // parse size
     auto find_or_default = [](const std::map<std::string, std::string>& m, const std::string& key, const std::string& def) -> std::string {
         auto it = m.find(key);
@@ -47,6 +77,10 @@ state::state(const pgnparser_ast::game &g)
     // parse board
     using board_t = std::vector<std::tuple<std::string, pgnparser_ast::token_t, int, int, bool>>;
     board_t boards = g.boards;
+    if(metadata.find("size") == metadata.end() && !boards.empty())
+    {
+        std::tie(size_x, size_y) = infer_size_from_fen(std::get<0>(boards.front()));
+    }
     std::optional<bool> is_even_timelines;
     auto it = metadata.find("board");
     if(it != metadata.end())
@@ -885,6 +919,52 @@ std::string state::show_fen() const
     return oss.str();
 }
 
+namespace {
+
+char shift_rank_char(char rank, int offset)
+{
+    if(rank < '1' || rank > '8' || offset == 0)
+    {
+        return rank;
+    }
+    int shifted = static_cast<int>(rank - '0') + offset;
+    if(shifted < 1 || shifted > 8)
+    {
+        return rank;
+    }
+    return static_cast<char>('0' + shifted);
+}
+
+pgnparser_ast::move shift_local_move_ranks(const pgnparser_ast::move &move, int offset)
+{
+    pgnparser_ast::move shifted = move;
+    if(offset == 0)
+    {
+        return shifted;
+    }
+    if(std::holds_alternative<pgnparser_ast::physical_move>(shifted.data))
+    {
+        auto &mv = std::get<pgnparser_ast::physical_move>(shifted.data);
+        if(mv.from_rank)
+        {
+            mv.from_rank = shift_rank_char(*mv.from_rank, offset);
+        }
+        mv.to_rank = shift_rank_char(mv.to_rank, offset);
+    }
+    else if(std::holds_alternative<pgnparser_ast::superphysical_move>(shifted.data))
+    {
+        auto &mv = std::get<pgnparser_ast::superphysical_move>(shifted.data);
+        if(mv.from_rank)
+        {
+            mv.from_rank = shift_rank_char(*mv.from_rank, offset);
+        }
+        mv.to_rank = shift_rank_char(mv.to_rank, offset);
+    }
+    return shifted;
+}
+
+}
+
 state::parse_pgn_res state::parse_move(const pgnparser_ast::move &move) const
 {
     std::vector<full_move> matched;
@@ -892,10 +972,14 @@ state::parse_pgn_res state::parse_move(const pgnparser_ast::move &move) const
     std::optional<full_move> fm;
     std::optional<piece_t> promotion;
     dprint("parse_move(",move,")");
+    const int rank_offset = std::max(0, 8 - get_board_size().second);
+    const pgnparser_ast::move shifted_move = shift_local_move_ranks(move, rank_offset);
+    const bool try_shifted = rank_offset > 0;
     constexpr static uint16_t FLAGS = SHOW_PAWN | SHOW_CAPTURE | SHOW_PROMOTION;
     if(std::holds_alternative<pgnparser_ast::physical_move>(move.data))
     {
         auto mv = std::get<pgnparser_ast::physical_move>(move.data);
+        auto shifted_mv = try_shifted ? std::optional(std::get<pgnparser_ast::physical_move>(shifted_move.data)) : std::nullopt;
         // for all physical moves avilable in current state
         for(vec4 p : gen_movable_pieces())
         {
@@ -911,6 +995,10 @@ state::parse_pgn_res state::parse_move(const pgnparser_ast::move &move) const
                 auto full = pgnparser(full_notation).parse_physical_move();
                 assert(full.has_value());
                 bool match = pgnparser::match_physical_move(mv, *full);
+                if(!match && shifted_mv.has_value())
+                {
+                    match = pgnparser::match_physical_move(*shifted_mv, *full);
+                }
                 if(match)
                 {
                     dprint("matched");
@@ -945,6 +1033,7 @@ state::parse_pgn_res state::parse_move(const pgnparser_ast::move &move) const
     {
         // do the same for superphysical moves
         auto spm = std::get<pgnparser_ast::superphysical_move>(move.data);
+        auto shifted_spm = try_shifted ? std::optional(std::get<pgnparser_ast::superphysical_move>(shifted_move.data)) : std::nullopt;
         bool is_relative = std::holds_alternative<pgnparser_ast::relative_board>(spm.to_board);
         for(vec4 p : gen_movable_pieces())
         {
@@ -970,6 +1059,10 @@ state::parse_pgn_res state::parse_move(const pgnparser_ast::move &move) const
                     auto full = pgnparser(full_notation).parse_superphysical_move();
                     assert(full.has_value());
                     bool match = pgnparser::match_superphysical_move(spm, *full);
+                    if(!match && shifted_spm.has_value())
+                    {
+                        match = pgnparser::match_superphysical_move(*shifted_spm, *full);
+                    }
                     if(match)
                     {
                         dprint("matched");

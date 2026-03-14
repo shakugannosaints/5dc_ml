@@ -117,6 +117,7 @@ darkhttpd ui/
 ### Documentation
 
 For more detail, please read [this page](docs/index.md).
+For AlphaZero deployment from source, see [docs/alphazero-deployment.md](docs/alphazero-deployment.md).
 
 ### TODOs
 - [x] checkmate display

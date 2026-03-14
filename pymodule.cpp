@@ -376,7 +376,14 @@ PYBIND11_MODULE(engine, m) {
         // metadata
         .def_readwrite("metadata", &game::metadata)
         // factory
-        .def_static("from_pgn", &game::from_pgn)
+        .def_static(
+            "from_pgn",
+            [](const std::string &pgn, bool allow_submit_with_checks) {
+                return game::from_pgn(pgn, allow_submit_with_checks);
+            },
+            py::arg("pgn"),
+            py::arg("allow_submit_with_checks") = false
+        )
         // core functions
         .def("get_current_state", &game::get_current_state)
         .def("get_current_present", &game::get_current_present)

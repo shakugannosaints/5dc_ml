@@ -8,11 +8,11 @@
 using namespace emscripten;
 
 // Safe wrapper that returns JavaScript object with success/error
-val create_game_from_pgn(const std::string& pgn) 
+val create_game_from_pgn(const std::string& pgn, bool allow_submit_with_checks = false)
 {
     val result = val::object();
     try {
-        auto game_ptr = std::make_shared<game>(game::from_pgn(pgn));
+        auto game_ptr = std::make_shared<game>(game::from_pgn(pgn, allow_submit_with_checks));
         result.set("success", true);
         result.set("game", val(game_ptr));
         return result;

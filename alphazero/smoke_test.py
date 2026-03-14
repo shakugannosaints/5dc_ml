@@ -727,6 +727,59 @@ def test_training_step():
     return True
 
 
+def test_collate_preserves_large_board_counts():
+    section("7b. Large-Board Collate")
+    from .env import PIECE_CHANNELS, BOARD_SQUARES
+    from .self_play import SemimoveRecord, collate_samples
+
+    device = torch.device("cpu")
+
+    def check_large_collate():
+        samples = [
+            SemimoveRecord(
+                board_planes=np.random.randn(40, PIECE_CHANNELS, BOARD_SQUARES).astype(np.float32),
+                last_move_markers=np.random.randn(40, BOARD_SQUARES).astype(np.float32),
+                l_coords=np.random.randint(-3, 4, (40,), dtype=np.int64),
+                t_coords=np.random.randint(0, 20, (40,), dtype=np.int64),
+                urgency=0.5,
+                padding_mask=np.zeros(40, dtype=bool),
+                policy_target=np.array([0.6, 0.4], dtype=np.float32),
+                action_board_indices=np.array([39, -1], dtype=np.int64),
+                action_from_squares=np.array([0, 0], dtype=np.int64),
+                action_to_squares=np.array([1, 0], dtype=np.int64),
+                action_delta_t=np.array([0, 0], dtype=np.float32),
+                action_delta_l=np.array([0, 0], dtype=np.float32),
+                action_is_submit=np.array([False, True], dtype=bool),
+                value_target=1.0,
+            ),
+            SemimoveRecord(
+                board_planes=np.random.randn(12, PIECE_CHANNELS, BOARD_SQUARES).astype(np.float32),
+                last_move_markers=np.random.randn(12, BOARD_SQUARES).astype(np.float32),
+                l_coords=np.random.randint(-3, 4, (12,), dtype=np.int64),
+                t_coords=np.random.randint(0, 20, (12,), dtype=np.int64),
+                urgency=0.5,
+                padding_mask=np.zeros(12, dtype=bool),
+                policy_target=np.array([1.0], dtype=np.float32),
+                action_board_indices=np.array([-1], dtype=np.int64),
+                action_from_squares=np.array([0], dtype=np.int64),
+                action_to_squares=np.array([0], dtype=np.int64),
+                action_delta_t=np.array([0], dtype=np.float32),
+                action_delta_l=np.array([0], dtype=np.float32),
+                action_is_submit=np.array([True], dtype=bool),
+                value_target=-1.0,
+            ),
+        ]
+
+        batch = collate_samples(samples, device)
+        assert batch["board_planes"].shape[1] == 40, "Large sample was truncated during collation"
+        assert not batch["padding_mask"][0, 39].item(), "Real board should not be masked out"
+        assert batch["padding_mask"][1, 39].item(), "Padded board should remain masked"
+        return True
+
+    check("preserve >32 boards", check_large_collate)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -748,6 +801,7 @@ def main():
     results['self_play'] = test_self_play()
     results['loss'] = test_loss()
     results['training_step'] = test_training_step()
+    results['large_collate'] = test_collate_preserves_large_board_counts()
 
     # Summary
     print(f"\n{'='*60}")

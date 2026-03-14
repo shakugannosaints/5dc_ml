@@ -1123,7 +1123,11 @@ class ReplayBuffer:
         return len(self.buffer)
 
 
-def collate_samples(samples: list[SemimoveRecord], device: torch.device, max_boards: int = 32) -> dict:
+def collate_samples(
+    samples: list[SemimoveRecord],
+    device: torch.device,
+    max_boards: int | None = None,
+) -> dict:
     """
     Collate a batch of SemimoveRecords into padded tensors.
 
@@ -1131,7 +1135,12 @@ def collate_samples(samples: list[SemimoveRecord], device: torch.device, max_boa
     policy targets + action metadata.
     """
     batch_size = len(samples)
-    max_n = min(max(s.board_planes.shape[0] for s in samples), max_boards)
+    if batch_size == 0:
+        raise ValueError("collate_samples() requires at least one sample")
+
+    max_n = max(s.board_planes.shape[0] for s in samples)
+    if max_boards is not None and max_boards > 0:
+        max_n = min(max_n, int(max_boards))
     piece_channels = samples[0].board_planes.shape[1]
     board_squares = samples[0].board_planes.shape[2]
 

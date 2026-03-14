@@ -26,7 +26,7 @@ class game
 public:
     std::map<std::string, std::string> metadata;
     
-    static game from_pgn(std::string str);
+    static game from_pgn(std::string str, bool allow_submit_with_checks = false);
     
     const state &get_current_state() const;
     const state &get_unmoved_state() const;

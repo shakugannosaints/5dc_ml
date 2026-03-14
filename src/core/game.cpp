@@ -30,7 +30,7 @@ game::game(std::unique_ptr<gnode<comments_t>> gt)
     now = cached.begin();
 }
 
-game game::from_pgn(std::string input)
+game game::from_pgn(std::string input, bool allow_submit_with_checks)
 {
     auto ag = pgnparser(input).parse_game();
     if(!ag.has_value())
@@ -42,7 +42,7 @@ game game::from_pgn(std::string input)
     gnode<comments_t> *cn = nullptr;
     // parse moves
     std::function<void(gnode<comments_t>*, const pgnparser_ast::gametree&)> dfs;
-    dfs = [&dfs, &cn](gnode<comments_t>* node, const pgnparser_ast::gametree& gt_ast) -> void {
+    dfs = [&dfs, &cn, allow_submit_with_checks](gnode<comments_t>* node, const pgnparser_ast::gametree& gt_ast) -> void {
         for(const auto& [act_ast, child_gt] : gt_ast.variations)
         {
             state s = node->get_state();
@@ -88,7 +88,7 @@ game game::from_pgn(std::string input)
                     moves.push_back(ext_move(fm, pt_opt.has_value() ? *pt_opt : QUEEN_W));
                 }
             }
-            bool flag = s.submit();
+            bool flag = allow_submit_with_checks ? s.submit<true>() : s.submit();
             if(!flag)
             {
                 std::ostringstream oss;
