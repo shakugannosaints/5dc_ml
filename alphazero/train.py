@@ -555,6 +555,12 @@ def main():
                         help="Restart each self-play worker after this many tasks")
     parser.add_argument('--max-game-length', type=int, default=None,
                         help="Optional semimove cutoff for self-play; <=0 disables it")
+    parser.add_argument('--temperature', type=float, default=None,
+                        help="Early-game self-play visit temperature")
+    parser.add_argument('--temperature-final', type=float, default=None,
+                        help="Late-game self-play visit temperature")
+    parser.add_argument('--temperature-threshold', type=int, default=None,
+                        help="Semimove threshold for switching to late-game temperature")
     parser.add_argument('--legal-cache-max', type=int, default=None,
                         help="Per-game legal-action cache entry cap for semimove env")
     parser.add_argument('--cpp-selfplay-exe', type=str, default=None,
@@ -605,6 +611,12 @@ def main():
         cfg.self_play.worker_max_tasks_per_child = max(1, args.sp_max_tasks_per_child)
     if args.max_game_length is not None:
         cfg.self_play.max_game_length = int(args.max_game_length)
+    if args.temperature is not None:
+        cfg.self_play.temperature = float(args.temperature)
+    if args.temperature_final is not None:
+        cfg.self_play.temperature_final = float(args.temperature_final)
+    if args.temperature_threshold is not None:
+        cfg.self_play.temp_threshold = max(0, int(args.temperature_threshold))
     if args.legal_cache_max:
         cfg.self_play.legal_cache_max_entries = max(128, args.legal_cache_max)
     if args.cpp_selfplay_exe:
