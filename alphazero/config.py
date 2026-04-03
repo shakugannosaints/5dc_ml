@@ -46,6 +46,12 @@ class MCTSConfig:
     temperature_start: float = 1.0      # exploration temperature
     temperature_threshold: int = 15     # after this many full moves, use temp=0
     leaf_batch_size: int = 4            # batched leaf evaluations per search wave
+    # Root-only progressive widening for very large legal frontiers.
+    use_root_progressive_widening: bool = False
+    pw_root_enable_above: int = 24
+    pw_root_min_children: int = 16
+    pw_root_c: float = 3.0
+    pw_root_alpha: float = 0.5
     # Submit prior: base probability assigned to submit action
     submit_prior_weight: float = 0.1
     # Reuse state expansions within one semimove search via a transposition table.

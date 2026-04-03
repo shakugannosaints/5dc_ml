@@ -213,6 +213,14 @@ def _run_eval(args, cfg: TrainConfig, model_path: Path, exe_path: Path) -> tuple
             "--seed", str(args.seed),
             "--output-data", str(output_path),
         ]
+        if args.root_progressive_widening:
+            cmd.extend([
+                "--root-progressive-widening",
+                "--pw-root-enable-above", str(args.pw_root_enable_above),
+                "--pw-root-min-children", str(args.pw_root_min_children),
+                "--pw-root-c", str(args.pw_root_c),
+                "--pw-root-alpha", str(args.pw_root_alpha),
+            ])
         if args.quiet_runner:
             cmd.append("--quiet")
 
@@ -288,6 +296,12 @@ def main() -> None:
     parser.add_argument("--games", type=int, default=32)
     parser.add_argument("--sims", type=int, default=800)
     parser.add_argument("--leaf-batch-size", type=int, default=4)
+    parser.add_argument("--root-progressive-widening", action="store_true",
+                        help="Enable root-only progressive widening in the C++ search")
+    parser.add_argument("--pw-root-enable-above", type=int, default=24)
+    parser.add_argument("--pw-root-min-children", type=int, default=16)
+    parser.add_argument("--pw-root-c", type=float, default=3.0)
+    parser.add_argument("--pw-root-alpha", type=float, default=0.5)
     parser.add_argument("--min-board-limit", type=int, default=30)
     parser.add_argument("--max-board-limit", type=int, default=50)
     parser.add_argument("--material-scale", type=float, default=2.0)

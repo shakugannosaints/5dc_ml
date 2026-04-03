@@ -491,13 +491,18 @@ class CppOnnxSelfPlayWorker:
             model_path, export_precision = self._export_model(provider_override="cpu")
         log_task_stats = bool(getattr(self.sp_cfg, "log_worker_task_stats", True))
         logger.info(
-            "cpp_onnx self-play runtime: provider=%s export_precision=%s leaf_batch_size=%s ort_threads=%s workers=%s task_games=%s",
+            "cpp_onnx self-play runtime: provider=%s export_precision=%s leaf_batch_size=%s ort_threads=%s workers=%s task_games=%s root_pw=%s enable_above=%s min_children=%s c=%s alpha=%s",
             provider,
             export_precision,
             max(1, int(getattr(self.mcts_cfg, "leaf_batch_size", 1))),
             ort_threads,
             workers,
             task_games,
+            bool(getattr(self.mcts_cfg, "use_root_progressive_widening", False)),
+            max(1, int(getattr(self.mcts_cfg, "pw_root_enable_above", 24))),
+            max(1, int(getattr(self.mcts_cfg, "pw_root_min_children", 16))),
+            max(0.0, float(getattr(self.mcts_cfg, "pw_root_c", 3.0))),
+            max(0.0, float(getattr(self.mcts_cfg, "pw_root_alpha", 0.5))),
         )
 
         tasks: list[tuple[int, int]] = []
@@ -635,6 +640,7 @@ class CppOnnxSelfPlayWorker:
                     "--output-data", str(output_path),
                     "--quiet",
                 ]
+                self._append_root_pw_args(cmd)
                 completed = subprocess.run(
                     cmd,
                     cwd=Path.cwd(),
@@ -739,6 +745,7 @@ class CppOnnxSelfPlayWorker:
             "--output-data", str(output_path),
             "--quiet",
         ]
+        self._append_root_pw_args(cmd)
 
         env = self._build_subprocess_env(provider)
 
@@ -838,6 +845,7 @@ class CppOnnxSelfPlayWorker:
             "--serve",
             "--quiet",
         ]
+        self._append_root_pw_args(cmd)
         return subprocess.Popen(
             cmd,
             cwd=Path.cwd(),
@@ -850,6 +858,17 @@ class CppOnnxSelfPlayWorker:
             errors="replace",
             bufsize=1,
         )
+
+    def _append_root_pw_args(self, cmd: list[str]) -> None:
+        if not bool(getattr(self.mcts_cfg, "use_root_progressive_widening", False)):
+            return
+        cmd.extend([
+            "--root-progressive-widening",
+            "--pw-root-enable-above", str(max(1, int(getattr(self.mcts_cfg, "pw_root_enable_above", 24)))),
+            "--pw-root-min-children", str(max(1, int(getattr(self.mcts_cfg, "pw_root_min_children", 16)))),
+            "--pw-root-c", str(max(0.0, float(getattr(self.mcts_cfg, "pw_root_c", 3.0)))),
+            "--pw-root-alpha", str(max(0.0, float(getattr(self.mcts_cfg, "pw_root_alpha", 0.5)))),
+        ])
 
     def _run_persistent_task(
         self,

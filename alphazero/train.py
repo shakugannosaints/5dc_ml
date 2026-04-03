@@ -539,6 +539,16 @@ def main():
     parser.add_argument('--sims', type=int, default=None, help="MCTS simulations per move")
     parser.add_argument('--leaf-batch-size', type=int, default=None,
                         help="Batched leaf evaluations per MCTS search wave")
+    parser.add_argument('--root-progressive-widening', action='store_true',
+                        help="Enable root-only progressive widening in the cpp_onnx self-play search")
+    parser.add_argument('--pw-root-enable-above', type=int, default=None,
+                        help="Enable root progressive widening only when legal root actions exceed this count")
+    parser.add_argument('--pw-root-min-children', type=int, default=None,
+                        help="Minimum number of root children to open when progressive widening is active")
+    parser.add_argument('--pw-root-c', type=float, default=None,
+                        help="Progressive widening growth coefficient for root children")
+    parser.add_argument('--pw-root-alpha', type=float, default=None,
+                        help="Progressive widening growth exponent for root children")
     parser.add_argument('--min-board-limit', type=int, default=None,
                         help="Minimum board-count limit for self-play termination")
     parser.add_argument('--max-board-limit', type=int, default=None,
@@ -595,6 +605,16 @@ def main():
         cfg.mcts.num_simulations = args.sims
     if args.leaf_batch_size:
         cfg.mcts.leaf_batch_size = max(1, args.leaf_batch_size)
+    if args.root_progressive_widening:
+        cfg.mcts.use_root_progressive_widening = True
+    if args.pw_root_enable_above is not None:
+        cfg.mcts.pw_root_enable_above = max(1, int(args.pw_root_enable_above))
+    if args.pw_root_min_children is not None:
+        cfg.mcts.pw_root_min_children = max(1, int(args.pw_root_min_children))
+    if args.pw_root_c is not None:
+        cfg.mcts.pw_root_c = max(0.0, float(args.pw_root_c))
+    if args.pw_root_alpha is not None:
+        cfg.mcts.pw_root_alpha = max(0.0, float(args.pw_root_alpha))
     if args.min_board_limit:
         cfg.self_play.min_board_limit = max(1, args.min_board_limit)
     if args.max_board_limit:
